@@ -13,14 +13,17 @@ class CameraManager:
         self._active_alignment_cam: Optional[str] = None
 
     def get(self, camera_id: str) -> Optional[Any]:
-        return self.cameras.get(camera_id)
+        try:
+            return self.cameras.get(camera_id)
+        except Exception as e:
+            logger.error(f"Error getting camera {camera_id}: {e}")
+            return None
 
     def ids(self) -> List[str]:
         return list(self.cameras.keys())
 
     @classmethod
     def from_definitions(cls, camera_definitions: list) -> "CameraManager":
-        # print("Create new camera list :", camera_definitions)
         cameras = {}
         for cam_info in camera_definitions:
             cam_id = str(cam_info.get("id", "cam_1"))
@@ -36,7 +39,7 @@ class CameraManager:
             except TypeError:
                 connected = camera.connection(width, height)
             except Exception as exc:
-                print(f"[CameraManager] {camera_id} connect error: {exc}")
+                logger.error(f"Error connecting camera {camera_id}: {exc}")
                 connected = False
 
             if not connected:
@@ -44,17 +47,18 @@ class CameraManager:
         return ok
 
     def snap(self, camera_id: str, timeout_ms: int = 1000):
-        camera = self.cameras.get(camera_id)
+        camera = self.get(camera_id)
         if camera is None:
+            logger.error(f"Camera {camera_id} not found")
             return None
         if hasattr(camera, "snap_frame"):
             return camera.snap_frame(timeout_ms=timeout_ms)
         return self.get_frame(camera_id, copy=True)
 
     def start_alignment_live(self, camera_id: str) -> bool:
-        target_camera = self.cameras.get(camera_id)
+        target_camera = self.get(camera_id)
         if target_camera is None:
-            logger.warning(f"[CameraManager] Camera {camera_id} not found for alignment.")
+            logger.warning(f"Camera {camera_id} not found for alignment.")
             return False
 
         for cid, cam in self.cameras.items():
@@ -71,7 +75,7 @@ class CameraManager:
 
     def stop_alignment_live(self, camera_id: Optional[str] = None):
         if camera_id:
-            cam = self.cameras.get(camera_id)
+            cam = self.get(camera_id)
             if cam and hasattr(cam, "stop_live"):
                 cam.stop_live()
             if self._active_alignment_cam == camera_id:
@@ -83,8 +87,9 @@ class CameraManager:
             self._active_alignment_cam = None
 
     def get_frame(self, camera_id: str, copy: bool = True):
-        camera = self.cameras.get(camera_id)
+        camera = self.get(camera_id)
         if camera is None:
+            logger.error(f"Camera {camera_id} not found")
             return None
         try:
             frame = camera.get_latest_frame()
@@ -92,7 +97,7 @@ class CameraManager:
                 return None
             return frame.copy() if copy and hasattr(frame, "copy") else frame
         except Exception as exc:
-            print(f"[CameraManager] {camera_id} frame error: {exc}")
+            logger.error(f"Error getting frame from camera {camera_id}: {exc}")
             return None
 
     def status(self) -> Dict[str, str]:
@@ -112,7 +117,7 @@ class CameraManager:
         for camera_id, camera in self.cameras.items():
             try:
                 if not camera.is_connected():
-                    print(f"[CameraManager] reconnecting {camera_id}")
+                    logger.info(f"Reconnecting {camera_id}")
                     if not camera.connection(width, height, fps):
                         all_ok = False
             except TypeError:
@@ -123,7 +128,7 @@ class CameraManager:
                 except Exception:
                     all_ok = False
             except Exception as exc:
-                print(f"[CameraManager] {camera_id} reconnect error: {exc}")
+                logger.error(f"Error reconnecting camera {camera_id}: {exc}")
                 all_ok = False
         return all_ok
 
@@ -133,4 +138,4 @@ class CameraManager:
             try:
                 camera.disconnect()
             except Exception as exc:
-                print(f"[CameraManager] {camera_id} disconnect error: {exc}")
+                logger.error(f"Error disconnecting camera {camera_id}: {exc}")

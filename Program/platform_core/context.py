@@ -2,9 +2,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 import uuid
 
-
 class InspectionContext:
-    """Shared data container for one inspection cycle ."""
+    """Shared data container for one inspection cycle."""
 
     def __init__(
         self,
