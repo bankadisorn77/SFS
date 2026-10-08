@@ -1,0 +1,82 @@
+{
+  "project_id": "SFS",
+  "device_id": "UTL-Ai-SFS(Dev)",
+  "ip": "169.254.38.213",
+  "mac": "48:21:0B:3D:2D:7B",
+  "api_port": 8080,
+  "api_key": "",
+  "MQTTServer": "169.254.26.65",
+  "server_url": "169.254.26.65",
+  "save_image_path": "saved_images_output",
+  "stop_flag_path": "/home/utac/Project/SFS-main/stop_worker.flag",
+    
+  "cameraAOI": {
+    "width": 1920,
+    "height": 1080
+  },
+  "r1_rule": {
+    "width": 1920,
+    "height": 1080,
+    "angle": 7
+  },
+  "r2_rule": {
+    "width": 1920,
+    "height": 1080,
+    "angle": 7
+  },
+  "cameras": [
+    {
+      "id": "cam_1",
+      "driver": "ueye",
+      "hardware_index": 1,
+      "enabled": true,
+      "pipeline": "SFS"
+    },
+    {
+      "id": "cam_2",
+      "driver": "ueye",
+      "hardware_index": 2,
+      "enabled": true,
+      "pipeline": "SFS"
+    },
+    {
+      "id": "cam_3",
+      "driver": "ueye",
+      "hardware_index": 3,
+      "enabled": true,
+      "pipeline": "SFS"
+    }
+  ],
+  "pipelines": {
+    "SFS": {
+      "mode": "shared",
+      "steps": [
+        {
+          "id": "capture",
+          "type": "capture"
+        },
+        {
+          "id": "measure",
+          "type": "measure"
+        },
+        {
+          "id": "validate",
+          "type": "validate"
+        },
+        {
+          "id": "decision",
+          "type": "decision"
+        }
+      ]
+    },
+    "stream_only": {
+      "mode": "shared",
+      "steps": [
+        {
+          "id": "stream",
+          "type": "stream_only"
+        }
+      ]
+    }
+  }
+}
