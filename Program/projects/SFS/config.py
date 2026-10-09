@@ -29,14 +29,19 @@ class Config:
         self.stop_flag_path = str(self.root.parent / "stop_worker.flag")
 
         self.inputChannel = [
-            {"name": "trigger", "channel": 0}
+            {"name": "round_1", "channel": 0},
+            {"name": "round_2", "channel": 1},
         ]
         self.outputChannel = [
-            {"name": "alarm", "channel": 0},
-            {"name": "contor", "channel": 1},
-            {"name": "state_machine", "channel": 2},
+            {"name": "cam_1", "channel": 0},
+            {"name": "cam_2", "channel": 1},
+            {"name": "cam_3", "channel": 2},
+            {"name": "round", "channel": 3},
+            {"name": "alarm", "channel": 4},
+            {"name": "state_machine", "channel": 5},
+            {"name": "FB1", "channel": 6},
+            {"name": "FB2", "channel": 7},
         ]
-
         self.cameraAOI = {"width": 1920, "height": 1080}
         self.r1_rule = {"width": 1920, "height": 1080, "angle": 7}
         self.r2_rule = {"width": 1920, "height": 1080, "angle": 7}

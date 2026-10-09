@@ -1,7 +1,7 @@
 # platform_core/io_manager.py
 from abc import ABC, abstractmethod
 import logging
-
+import traceback
 logger = logging.getLogger("IOManager")
 
 
@@ -83,6 +83,8 @@ class AdvantechIOManager(BaseIOManager):
             return 0
 
     def write_output(self, channel: int, value: bool) -> bool:
+        # if channel in (4, 5):
+        #     print(f"[IO] ch{channel}={value} <- {traceback.extract_stack(limit=3)[0].name}")
         if not self._is_connected or not self.gpio:
             return False
         try:

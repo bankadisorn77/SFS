@@ -9,7 +9,15 @@
   "server_url": "169.254.26.65",
   "save_image_path": "saved_images_output",
   "stop_flag_path": "/home/utac/Project/SFS-main/stop_worker.flag",
-    
+  "inputChannel": [
+    {"name": "round_1", "channel": 0},
+    {"name": "round_2", "channel": 1}
+  ],
+  "outputChannel": [
+    {"name": "cam_1", "channel": 0}, {"name": "cam_2", "channel": 1}, {"name": "cam_3", "channel": 2},
+    {"name": "round", "channel": 3}, {"name": "alarm", "channel": 4}, {"name": "state_machine", "channel": 5},
+    {"name": "FB1", "channel": 6}, {"name": "FB2", "channel": 7}
+  ],
   "cameraAOI": {
     "width": 1920,
     "height": 1080

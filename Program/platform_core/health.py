@@ -76,7 +76,7 @@ class HealthMonitor:
         if new_status == self._current_status:
             return
         self._current_status = new_status
-        logger.warning(f"System health state changed: {self._current_status}")
+        # logger.warning(f"System health state changed: {self._current_status}")
         if self.on_status_change:
             try:
                 self.on_status_change(self.status)

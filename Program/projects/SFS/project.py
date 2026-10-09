@@ -103,7 +103,7 @@ class SfsPokaYokeProject(ProjectAdapter):
                 #      valid = False
                 context.results[camera_id] = bool(valid)
 
-            print(f'validation results: {info}')
+            # print(f'validation results: {info}')
             return
 
 
@@ -122,6 +122,7 @@ class SfsPokaYokeProject(ProjectAdapter):
     def run(self, runtime):
         self.io = IO(runtime.io_manager, self.config)
         self.io.reset_outputs()
+        self.io.set_state_machine(True)
         self._last_status["machine_status"] = True
         self._remove_stream_control()
         self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)

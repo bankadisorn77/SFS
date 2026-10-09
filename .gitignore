@@ -1,17 +1,57 @@
-Set-Content -Path .gitignore -Value @"
-# Environments
+# ==========================================
+# Python Bytecode & Runtime Cache
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ==========================================
+# Virtual Environments & Env Files
+# ==========================================
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 .env
-.venv
+.env.*
+!.env.example
 
-# Python bytecode & cache
-__pycache__/
-*.py[cod]
-*$py.class
-"@
-
+# ==========================================
+# Project Output Data & Logs 
+# ==========================================
+Program/saved_images_output/
 *.jpg
+*.jpeg
+*.png
+*.bmp
+!icon/*.ico
+!icon/*.png
+logs/
+*.log
+
+# ==========================================
+# Local Configs & Data 
+# ==========================================
+# Program/config/config.json
+# Program/config/datalist.csv
+
+# ==========================================
+# Developer Tools & AI Assistants
+# ==========================================
+.aider*
+.claude/
+.cursor/
+
+# ==========================================
+# IDE & System Files
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
