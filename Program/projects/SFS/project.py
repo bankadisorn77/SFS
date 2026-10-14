@@ -103,7 +103,6 @@ class SfsPokaYokeProject(ProjectAdapter):
                 #      valid = False
                 context.results[camera_id] = bool(valid)
 
-            # print(f'validation results: {info}')
             return
 
 

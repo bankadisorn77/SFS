@@ -1,12 +1,14 @@
 import asyncio
 import json
 import os
+import logging
 from multiprocessing import shared_memory
 import struct
 import time
 
 SHM_NAME = "PROJECT_SHARED_STATUS_MEMORY"
 SHM_SIZE = 8192 
+logger = logging.getLogger(__name__)
 
 
 class resiver:
@@ -34,7 +36,7 @@ class resiver:
       return False
 
   async def run_pipe_resiver(self):
-    print(f"[RECEIVER-SHM] Monitoring Shared Memory segment: {SHM_NAME}")
+    logger.info("Monitoring shared memory segment: %s", SHM_NAME)
     self.running = True
 
     while self.running:
@@ -58,9 +60,9 @@ class resiver:
               else:
                 self.on_data_received(data)
             else:
-              print(f"[RECEIVER-SHM] Received: {data}")
+              logger.info("Received shared memory payload: %s", data)
           except Exception as e:
-            print(f"[RECEIVER-SHM] Decode error: {e}")
+            logger.warning("Failed to decode shared memory payload: %s", e)
 
         await asyncio.sleep(0.05)
 
@@ -69,7 +71,7 @@ class resiver:
         await asyncio.sleep(0.5)
       except Exception as e:
         if self.running:
-          print(f"[RECEIVER-SHM] Error: {e}")
+          logger.warning("Shared memory receiver error: %s", e)
           await asyncio.sleep(0.5)
 
   def close(self):
@@ -80,7 +82,7 @@ class resiver:
       except Exception:
         pass
       self.shm = None
-    print("[RECEIVER-SHM] Closed cleanly.")
+    logger.info("Shared memory receiver closed.")
 
 
 class sender:
@@ -97,12 +99,12 @@ class sender:
           name=SHM_NAME, create=True, size=SHM_SIZE
       )
       struct.pack_into("<II", self.shm.buf, 0, 0, 0)
-      print(f"[SENDER-SHM] Created Shared Memory segment: {SHM_NAME}")
+      logger.info("Created shared memory segment: %s", SHM_NAME)
     except FileExistsError:
       self.shm = shared_memory.SharedMemory(name=SHM_NAME)
-      print(f"[SENDER-SHM] Attached to existing Shared Memory: {SHM_NAME}")
+      logger.info("Attached to existing shared memory segment: %s", SHM_NAME)
     except Exception as e:
-      print(f"[SENDER-SHM] Init Error: {e}")
+      logger.exception("Failed to initialize shared memory sender: %s", e)
       self.shm = None
 
   def connect(self):
@@ -120,9 +122,7 @@ class sender:
       length = len(payload_bytes)
 
       if length > (SHM_SIZE - 8):
-        print(
-            f"[SENDER-SHM] Payload too large ({length} bytes > {SHM_SIZE - 8})"
-        )
+        logger.error("Shared memory payload too large (%s bytes > %s).", length, SHM_SIZE - 8)
         return False
       self.seq = (self.seq + 1) % 0xFFFFFFFF
 
@@ -132,7 +132,7 @@ class sender:
       return True
 
     except Exception as e:
-      print(f"[SENDER-SHM] Write error: {e}")
+      logger.exception("Failed to write shared memory payload: %s", e)
       self.close()
       return False
 
@@ -144,7 +144,7 @@ class sender:
       except Exception:
         pass
       self.shm = None
-    print("[SENDER-SHM] Closed.")
+    logger.info("Shared memory sender closed.")
 
 
 if __name__ == "__main__":
@@ -160,7 +160,7 @@ if __name__ == "__main__":
           }
       }
       s.send_event(payload)
-      print(f"[SENDER] Sent payload to RAM at {time.strftime('%H:%M:%S')}")
+      logger.info("Sent payload to shared memory.")
       time.sleep(2)
   except KeyboardInterrupt:
     s.close()

@@ -1,9 +1,14 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class Logic:
     def __init__(self):
         self.state = 1
 
     def evaluate(self, info: dict, rule: dict) -> tuple[bool, str]:
-        # print(f"Evaluating detection info: {info} with rule: {rule}")
+        print(info)
         if not info or info.get("status") != "OK":
             return False, "Detection Failed (< 2 Holes)"
 
@@ -48,4 +53,4 @@ if __name__ == "__main__":
     }
 
     is_pass, message = logic.evaluate(info, rule)
-    print(f"Result: {is_pass} | Reason: {message}")
+    logger.info("Result: %s | Reason: %s", is_pass, message)

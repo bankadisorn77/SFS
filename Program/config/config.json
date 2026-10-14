@@ -5,7 +5,7 @@
   "mac": "48:21:0B:3D:2D:7B",
   "api_port": 8080,
   "api_key": "",
-  "MQTTServer": "169.254.26.65",
+  "MQTTServer": "10.151.27.1",
   "server_url": "169.254.26.65",
   "save_image_path": "saved_images_output",
   "stop_flag_path": "/home/utac/Project/SFS-main/stop_worker.flag",
@@ -25,12 +25,12 @@
   "r1_rule": {
     "width": 1920,
     "height": 1080,
-    "angle": 7
+    "angle": 10
   },
   "r2_rule": {
     "width": 1920,
     "height": 1080,
-    "angle": 7
+    "angle": 10
   },
   "cameras": [
     {

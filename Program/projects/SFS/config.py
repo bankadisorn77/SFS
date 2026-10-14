@@ -1,14 +1,17 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
     project_id = "SFS"
 
     def __init__(self, path: Optional[str] = None):
-        print("[SETUP] set config")
+        logger.info("Setting up config.")
         self.root = Path(__file__).resolve().parents[2]
         self.path = Path(
             path
@@ -143,7 +146,7 @@ class Config:
                 self.stop_flag_path = str(self.root.parent / self.stop_flag_path)
 
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            print(f"[CONFIG] failed to load {self.path}: {exc}")
+            logger.warning("Failed to load config %s: %s", self.path, exc)
 
     def as_dict(self) -> dict:
         return {

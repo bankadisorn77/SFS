@@ -1,9 +1,12 @@
 import datetime
 import json
+import logging
 import paho.mqtt.client as mqtt
-from ProcessClass.getip import GetIPAddress
-from ProcessClass.repeatedTimer import RepeatedTimer
+from Program.platform_core.module.getip import GetIPAddress
+from Program.platform_core.module.repeatedTimer import RepeatedTimer
 import threading  
+
+logger = logging.getLogger(__name__)
 
 
 class MQTT:
@@ -83,10 +86,7 @@ class MQTT:
       self.MQTTserver = MQTTserver
       self.machineID = machineID
       self.currentMachineIP, _, _ = GetIPAddress().get_active_lan_info()
-      print(
-          f"[MQTT] New Target Server: {self.MQTTserver} | Device ID:"
-          f" {self.machineID}"
-      )
+      logger.info("New target server: %s | Device ID: %s", self.MQTTserver, self.machineID)
       self.connectMqtt()
 
   def connectMqtt(self):
@@ -119,7 +119,7 @@ class MQTT:
       if not self.timer.is_running:
         self.timer.start()
     except Exception as e:
-      print(f"[MQTT] Connection setup error: {e}")
+      logger.exception("MQTT connection setup error: %s", e)
       self.MQTTConnected = False
 
   def disconnectMQTT(self):
@@ -129,7 +129,7 @@ class MQTT:
         self.timer.stop()
       self.mqtt_client.loop_stop()
       self.mqtt_client.disconnect()
-      print("[MQTT] Disconnected cleanly.")
+      logger.info("Disconnected cleanly.")
     except Exception:
       pass
 
@@ -143,7 +143,7 @@ class MQTT:
       self.callbackRestart(data)
 
   def onDeletedevice(self, data):
-    print("[MQTT DELETE]")
+    logger.info("Received delete command.")
     if self.callbackDeletedevice is not None:
       self.callbackDeletedevice(data)
 
@@ -203,7 +203,7 @@ class MQTT:
         topic, _ = self.topic()
         self.mqtt_client.publish(topic[i], msg)
       except Exception as e:
-        print(f"[MQTT] Publish error: {e}")
+        logger.warning("MQTT publish error: %s", e)
 
   # ==================== MQTT Events ====================
 
@@ -214,7 +214,7 @@ class MQTT:
       for t in sub_topics:
         self.mqtt_client.subscribe(t, qos=0)
 
-      print("[MQTT] Connected Event (rc=0)")
+      logger.info("Connected to MQTT (rc=0).")
       if not self._has_started and callable(self.agentStartup):
         self._has_started = True
         threading.Thread(target=self.agentStartup, daemon=True).start()
@@ -223,7 +223,7 @@ class MQTT:
 
   def onDisconnectedMqtt(self, client, userdata, *args):
     self.MQTTConnected = False
-    print("[MQTT] Disconnected. Client will auto-reconnect in background.")
+    logger.warning("Disconnected from MQTT; client will auto-reconnect in background.")
 
   def onMessageMqtt(self, client, userdata, msg):
     _, sub_topics = self.topic()
@@ -236,7 +236,7 @@ class MQTT:
         data = payload_str
 
       if msg.topic == sub_topics[0]:
-        print(f"[MQTT] Received Program Control: {data}")
+        logger.info("Received program control: %s", data)
         self.onProgramcontrol(data)
       elif msg.topic == sub_topics[1]:
         if isinstance(data, str):
@@ -261,4 +261,4 @@ class MQTT:
         self.onStreamcontrol(data)
 
     except Exception as e:
-      print(f"[MQTT] Error handling message: {e}")
+      logger.exception("Error handling MQTT message: %s", e)

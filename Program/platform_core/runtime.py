@@ -56,7 +56,7 @@ class PlatformRuntime:
             self._running = True
             self.update_status(program_status="RUNNING")
         except Exception as e:
-            print(e)
+            logger.exception("Failed to start platform runtime: %s", e)
         return bool(camera_ok and io_ok)
 
     def hardware_ready(self) -> bool:
@@ -119,7 +119,6 @@ class PlatformRuntime:
             if status == self._last_reported:
                 return
             self._last_reported = dict(status)
-        # print(f"[PlatformRuntime] Status update: {status}")
         self.reporter.report(status)
 
     def run_cycle(self, pipeline_id: str, cycle_id: Optional[str] = None,

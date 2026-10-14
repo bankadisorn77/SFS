@@ -1,4 +1,10 @@
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
+
+
 class API_CALL():
     def __init__(self,config=None):
         self.config = config
@@ -57,13 +63,13 @@ class API_CALL():
                 else:
                     return False
             except httpx.CloseError:
-                print('Client Error Cannot connect to server')
+                logger.error("Cannot connect to server.")
                 return False
             except httpx.TimeoutException:
-                 print('Client Error Cannot Timeout')
+                 logger.error("Server request timed out.")
                  return False
             except Exception as e:
-                print(f'ERROR {e}')
+                logger.exception("Device registration failed: %s", e)
                 return False
 
     async def newAlarm(self,imagebase64 :str = None , detection_info :str = None, cycle_id=None, camera_id=None, pipeline_id=None):
@@ -81,13 +87,17 @@ class API_CALL():
             try:
                 res = await client.post(url=url,headers=header,json=payload)
                 if res.status_code == 200:
-                    print('send log successfully')
+                    logger.info("Image log sent successfully.")
                 else:
-                    print(res.status_code, res.json())
+                    logger.warning(
+                        "Image log request failed (%s): %s",
+                        res.status_code,
+                        res.json(),
+                    )
             except httpx.CloseError:
-                print('Client Error Cannot connect to server')
+                logger.error("Cannot connect to server.")
 
             except httpx.TimeoutException:
-                print('Client Error Cannot Timeout')
+                logger.error("Server request timed out.")
             except Exception as e:
-                print(f'ERROR {e}')
+                logger.exception("Image log request failed: %s", e)

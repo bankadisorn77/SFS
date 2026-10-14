@@ -35,7 +35,6 @@ class IO:
     def cam_output(self, camera_statuses: Dict[str, bool], round_idx: int = 0):
         for cam_id, is_pass in camera_statuses.items():
             self.io.write_output(self.config.get_output_channel("round", default=3), bool(round_idx))
-            # print(f"[IO] Setting output for {cam_id} to {is_pass} on round {bool(round_idx)}")
             if is_pass:
                 ch = self.cam_channel_map.get(cam_id)
                 if ch is not None:

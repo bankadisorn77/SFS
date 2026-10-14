@@ -1,5 +1,10 @@
+import logging
+
 import numpy as np
 import cv2 as cv
+
+logger = logging.getLogger(__name__)
+
 
 class Detector:
     def __init__(self, color_ranges=None, spec=None):
@@ -114,10 +119,10 @@ if __name__ == "__main__":
     detector = Detector()
     img = cv.imread("/home/utac/Desktop/SFS/BG/e9.bmp")
     if img is None:
-        print("Error: Cannot read image")
+        logger.error("Cannot read image.")
         exit(1)
     img, info = detector.detect_frame(img)
-    print(info)
+    logger.info("%s", info)
     cv.imshow("Detected Image", img)
     cv.waitKey(0)
     cv.destroyAllWindows()

@@ -1,11 +1,15 @@
 # ProcessClass/ueyeCam.py
 import cv2 as cv
+import logging
 import numpy as np
 from pyueye import ueye
 import sys
 import threading
 import time
 import weakref
+
+logger = logging.getLogger(__name__)
+
 
 class UeyeCamera:
     _capture_lock = threading.Lock()
@@ -69,10 +73,10 @@ class UeyeCamera:
             # device_id_flag = self.camera_id | 0x8000
             device_id_flag = self.camera_id 
             self.hCam = ueye.HIDS(device_id_flag)
-            print(f"[CAM {self.camera_id}] Initializing camera ID {self.hCam.value}...")
+            logger.info("Camera %s: initializing camera ID %s.", self.camera_id, self.hCam.value)
 
             if ueye.is_InitCamera(self.hCam, None) != ueye.IS_SUCCESS:
-                print(f"[CAM {self.camera_id}] Init failed.")
+                logger.error("Camera %s: initialization failed.", self.camera_id)
                 self.hCamConnected = False
                 return False
 
@@ -101,10 +105,10 @@ class UeyeCamera:
                 self.bytes_per_pixel = int(self.nBitsPerPixel_py / 8)
 
             ueye.is_SetExternalTrigger(self.hCam, ueye.IS_SET_TRIGGER_OFF)
-            print(f"[CAM {self.camera_id}] Standby ready (Trigger/Snap Mode).")
+            logger.info("Camera %s: standby ready (trigger/snap mode).", self.camera_id)
             return True
         except Exception as e:
-            print(f"[CAM {self.camera_id}] Connection error: {e}")
+            logger.exception("Camera %s: connection error: %s", self.camera_id, e)
             self.disconnect()
             return False
 
@@ -117,7 +121,12 @@ class UeyeCamera:
                     ret = ueye.is_FreezeVideo(self.hCam, timeout_ms)
                 if ret == ueye.IS_SUCCESS:
                     return self._extract_frame()
-                print(f"[CAM {self.camera_id}] FreezeVideo failed with code {ret} (attempt {attempt + 1}/3)")
+                logger.warning(
+                    "Camera %s: FreezeVideo failed with code %s (attempt %s/3).",
+                    self.camera_id,
+                    ret,
+                    attempt + 1,
+                )
                 time.sleep(0.1)
             self.hCamConnected = False
             return None
@@ -139,7 +148,7 @@ class UeyeCamera:
         self.is_streaming = True
         self.stream_thread = threading.Thread(target=self._live_worker, daemon=True)
         self.stream_thread.start()
-        print(f"[CAM {self.camera_id}] Live Alignment Video Started.")
+        logger.info("Camera %s: live alignment video started.", self.camera_id)
         return True
 
     def stop_live(self):
@@ -148,7 +157,7 @@ class UeyeCamera:
             self.stream_thread.join(timeout=1.0)
         if self.hCamConnected and self.hCam.value != 0:
             ueye.is_StopLiveVideo(self.hCam, ueye.IS_WAIT)
-        print(f"[CAM {self.camera_id}] Live Video Stopped.")
+        logger.info("Camera %s: live video stopped.", self.camera_id)
 
     def _live_worker(self):
         delay = 1.0 / max(1, self.target_fps)
@@ -198,7 +207,7 @@ class UeyeCamera:
                 self._last_seq = seq
                 self._last_seq_time = now
             elif self._seq_changed and now - self._last_seq_time > 2.0:
-                print(f"[CAM {self.camera_id}] No new frames -> disconnected")
+                logger.warning("Camera %s: no new frames; disconnected.", self.camera_id)
                 self.hCamConnected = False
                 return False
             return True
@@ -220,7 +229,13 @@ class UeyeCamera:
             if ret != ueye.IS_SUCCESS:
                 self._probe_fails += 1
                 limit = 2 if ret == -1 else 5
-                print(f"[CAM {self.camera_id}] probe failed ret={ret} ({self._probe_fails}/{limit})")
+                logger.warning(
+                    "Camera %s: probe failed ret=%s (%s/%s).",
+                    self.camera_id,
+                    ret,
+                    self._probe_fails,
+                    limit,
+                )
                 if self._probe_fails >= limit:
                     self.hCamConnected = False
                     self._last_probe_ok = False

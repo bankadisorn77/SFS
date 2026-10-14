@@ -1,8 +1,12 @@
 import os
 import socket
 import fcntl
+import logging
 import struct
 import time
+
+logger = logging.getLogger(__name__)
+
 
 class GetIPAddress:
     def __init__(self):
@@ -75,7 +79,7 @@ class GetIPAddress:
         """วนลูปรอจนกว่าจะเสียบสายแลนและได้ IP เรียบร้อย"""
         ip, mac, iface = self.get_active_lan_info()
         while ip.startswith("127.") or iface is None:
-            print("Wired network is not ready! Waiting for cable/IP...")
+            logger.warning("Wired network is not ready; waiting for cable/IP...")
             time.sleep(retry_delay)
             ip, mac, iface = self.get_active_lan_info()
             
@@ -85,4 +89,4 @@ class GetIPAddress:
 if __name__ == '__main__':
     detector = GetIPAddress()
     ip, mac, iface = detector.loopCheck()
-    print(f"Connected on [{iface}] -> IP: {ip} | MAC: {mac}")
+    logger.info("Connected on [%s] -> IP: %s | MAC: %s", iface, ip, mac)
