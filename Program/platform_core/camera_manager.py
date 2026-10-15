@@ -47,7 +47,6 @@ class CameraManager:
         self.active = bool(active)
 
     def connect_all(self, width: int, height: int, fps: int = 15) -> bool:
-        self.active = True
         ok = True
         for camera_id, camera in self.cameras.items():
             try:
@@ -63,6 +62,7 @@ class CameraManager:
                 connected = False
             if not connected:
                 ok = False
+        self.active = True
         return ok
 
     def snap(self, camera_id: str, timeout_ms: int = 1000):
