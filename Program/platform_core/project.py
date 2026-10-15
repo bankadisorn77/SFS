@@ -2,13 +2,15 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Callable
 
 from .context import InspectionContext
+from .communication import PlatformStatusReporter
 
 
 class ProjectAdapter(ABC):
     """Project contract consumed by PlatformRuntime.
 
-    Hardware is supplied by the project through factories. The core never imports
-    a concrete camera, IO driver, or project implementation.
+    Hardware and communication transports are supplied by the project through
+    factories. The core never imports a concrete camera, IO driver, or project
+    implementation.
     """
 
     @property
@@ -28,12 +30,7 @@ class ProjectAdapter(ABC):
         return []
 
     def create_camera(self, definition: Dict[str, Any]):
-        """Create a camera adapter for one camera definition.
-
-        Projects must override this when they declare cameras. Keeping this
-        factory in the project prevents the platform core from depending on a
-        vendor SDK or transport such as IDS, USB, RTSP, or GigE.
-        """
+        """Create a camera adapter for one camera definition."""
         raise NotImplementedError(
             "Projects with cameras must implement create_camera(definition)."
         )
@@ -45,6 +42,10 @@ class ProjectAdapter(ABC):
     def create_io_manager(self):
         """Return an IO adapter, or None when the project has no IO capability."""
         return None
+
+    def create_status_reporter(self):
+        """Return a transport adapter; no transport is required by default."""
+        return PlatformStatusReporter()
 
     def io_definition(self) -> Dict[str, Any]:
         return {}
