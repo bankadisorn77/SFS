@@ -70,7 +70,7 @@ class PlatformRuntime:
         io_ok = not self.io_required
         try:
             if self.camera_manager.cameras and self.project.connect_cameras_on_start():
-                camera_ok = self.camera_manager.connect_all(width, height, fps)
+                camera_ok = self.camera_manager.connect_all(width, height, fps, activate=True)
             if self.io_manager is not None:
                 try:
                     io_ok = bool(self.io_manager.connect())
