@@ -46,7 +46,8 @@ class CameraManager:
         """Mark whether the owning project currently expects live camera streams."""
         self.active = bool(active)
 
-    def connect_all(self, width: int, height: int, fps: int = 15) -> bool:
+    def connect_all(self, width: int, height: int, fps: int = 15, activate: bool = True) -> bool:
+        self.active = False
         ok = True
         for camera_id, camera in self.cameras.items():
             try:
@@ -62,7 +63,8 @@ class CameraManager:
                 connected = False
             if not connected:
                 ok = False
-        self.active = True
+        if activate:
+            self.active = True
         return ok
 
     def snap(self, camera_id: str, timeout_ms: int = 1000):
