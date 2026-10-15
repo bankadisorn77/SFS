@@ -69,7 +69,7 @@ class PlatformRuntime:
         camera_ok = True
         io_ok = not self.io_required
         try:
-            if self.camera_manager.cameras:
+            if self.camera_manager.cameras and self.project.connect_cameras_on_start():
                 camera_ok = self.camera_manager.connect_all(width, height, fps)
             if self.io_manager is not None:
                 try:
@@ -89,6 +89,8 @@ class PlatformRuntime:
             return False
         details = self.health_monitor.status.get("details", {})
         if self.camera_manager.cameras:
+            if not self.camera_manager.active:
+                return False
             cameras = details.get("camera")
             if not isinstance(cameras, dict) or not cameras or not all(cameras.values()):
                 return False
