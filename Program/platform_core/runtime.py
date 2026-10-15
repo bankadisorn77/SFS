@@ -4,7 +4,6 @@ import uuid
 from typing import List, Optional
 
 from .camera_manager import CameraManager
-from .communication import PlatformStatusReporter
 from .context import InspectionContext
 from .health import HealthMonitor
 from .pipeline import PipelineEngine
@@ -28,16 +27,14 @@ class PlatformRuntime:
     ):
         self.project = project
         self.pipeline_engine = PipelineEngine()
-        self.reporter = status_reporter or PlatformStatusReporter()
+        self.reporter = status_reporter or project.create_status_reporter()
         self.camera_manager = camera_manager or CameraManager.from_definitions(
             project.camera_definition(), factory=project.create_camera
         )
         self.io_manager = io_manager if io_manager is not None else project.create_io_manager()
         self.io_required = bool(project.requires_io())
         if self.io_required and self.io_manager is None:
-            raise ValueError(
-                "This project requires IO but create_io_manager() returned None."
-            )
+            raise ValueError("This project requires IO but create_io_manager() returned None.")
         self.health_monitor = health_monitor or HealthMonitor(
             on_status_change=self._on_health_change,
             io_manager=self.io_manager,
@@ -135,28 +132,19 @@ class PlatformRuntime:
                 camera_id: bool(cam and getattr(cam, "is_connected", lambda: False)())
                 for camera_id, cam in self.camera_manager.cameras.items()
             }
-
-        status = {
-            "program_status": "RUNNING" if self._running else "OFF",
-            "camera": camera_statuses,
-        }
+        status = {"program_status": "RUNNING" if self._running else "OFF", "camera": camera_statuses}
         if self.io_manager is not None:
             status["gpio"] = bool(details.get("gpio", self.io_manager.is_connected()))
         status.update(self.project.status_payload())
         status.update(kwargs)
-
         with self._status_lock:
             if status == self._last_reported:
                 return
             self._last_reported = dict(status)
         self.reporter.report(status)
 
-    def run_cycle(
-        self,
-        pipeline_id: str,
-        cycle_id: Optional[str] = None,
-        cam_active: Optional[List[str]] = None,
-    ) -> InspectionContext:
+    def run_cycle(self, pipeline_id: str, cycle_id: Optional[str] = None,
+                  cam_active: Optional[List[str]] = None) -> InspectionContext:
         context = InspectionContext(
             project_id=self.project.project_id,
             pipeline_id=pipeline_id,
@@ -166,7 +154,6 @@ class PlatformRuntime:
         definition = self.project.pipeline_definition(pipeline_id)
         if not definition:
             return context
-
         target_cameras = cam_active if cam_active is not None else self.camera_manager.ids()
         for camera_id in target_cameras:
             if camera_id not in self.camera_manager.ids():
@@ -181,5 +168,4 @@ class PlatformRuntime:
                         logger.warning("Failed to save cycle image: %s", exc)
             else:
                 logger.warning("Failed to snap frame from %s", camera_id)
-
         return self.pipeline_engine.run(definition, context)
