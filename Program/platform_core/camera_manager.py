@@ -16,6 +16,7 @@ class CameraManager:
     def __init__(self, cameras: Dict[str, Any]):
         self.cameras = dict(cameras)
         self._active_alignment_cam: Optional[str] = None
+        self.active = False
 
     def get(self, camera_id: str) -> Optional[Any]:
         return self.cameras.get(camera_id)
@@ -41,7 +42,12 @@ class CameraManager:
             cameras[camera_id] = factory(definition)
         return cls(cameras)
 
+    def set_active(self, active: bool):
+        """Mark whether the owning project currently expects live camera streams."""
+        self.active = bool(active)
+
     def connect_all(self, width: int, height: int, fps: int = 15) -> bool:
+        self.active = True
         ok = True
         for camera_id, camera in self.cameras.items():
             try:
@@ -144,6 +150,7 @@ class CameraManager:
         return all_ok
 
     def disconnect_all(self):
+        self.active = False
         self.stop_alignment_live()
         for camera_id, camera in self.cameras.items():
             try:
