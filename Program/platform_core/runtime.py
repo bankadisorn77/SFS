@@ -1,6 +1,5 @@
 import logging
 import threading
-import time
 import uuid
 from typing import List, Optional
 
@@ -8,7 +7,6 @@ from .camera_manager import CameraManager
 from .communication import PlatformStatusReporter
 from .context import InspectionContext
 from .health import HealthMonitor
-from .io_manager import AdvantechIOManager, BaseIOManager
 from .pipeline import PipelineEngine
 from .project import ProjectAdapter
 from .storage import ImageStorage
@@ -17,15 +15,35 @@ logger = logging.getLogger("PlatformRuntime")
 
 
 class PlatformRuntime:
-    def __init__(self, project: ProjectAdapter, camera_manager: Optional[CameraManager] = None,
-                 io_manager: Optional[BaseIOManager] = None, health_monitor: Optional[HealthMonitor] = None,
-                 io_device: str = "USB-4761,BID#0"):
+    """Owns lifecycle and shared services for exactly one Project instance."""
+
+    def __init__(
+        self,
+        project: ProjectAdapter,
+        camera_manager: Optional[CameraManager] = None,
+        io_manager=None,
+        health_monitor: Optional[HealthMonitor] = None,
+        status_reporter=None,
+        health_check_interval: float = 3.0,
+    ):
         self.project = project
         self.pipeline_engine = PipelineEngine()
-        self.reporter = PlatformStatusReporter()
-        self.camera_manager = camera_manager or CameraManager.from_definitions(project.camera_definition())
-        self.io_manager = io_manager or AdvantechIOManager(device=io_device)
-        self.health_monitor = health_monitor or HealthMonitor(on_status_change=self._on_health_change,io_manager=self.io_manager, camera_manager=self.camera_manager)
+        self.reporter = status_reporter or PlatformStatusReporter()
+        self.camera_manager = camera_manager or CameraManager.from_definitions(
+            project.camera_definition(), factory=project.create_camera
+        )
+        self.io_manager = io_manager if io_manager is not None else project.create_io_manager()
+        self.io_required = bool(project.requires_io())
+        if self.io_required and self.io_manager is None:
+            raise ValueError(
+                "This project requires IO but create_io_manager() returned None."
+            )
+        self.health_monitor = health_monitor or HealthMonitor(
+            on_status_change=self._on_health_change,
+            io_manager=self.io_manager,
+            camera_manager=self.camera_manager,
+            check_interval=health_check_interval,
+        )
         storage = project.storage_definition().get("base_dir") if hasattr(project, "storage_definition") else None
         self.storage = ImageStorage(storage) if storage else None
         self._running = False
@@ -39,32 +57,44 @@ class PlatformRuntime:
             self.pipeline_engine.register(step_type, handler)
 
     def _register_health_checks(self):
-        self.health_monitor.register_check("camera", self.camera_manager.all_connected)
-        self.health_monitor.register_check("gpio", self.io_manager.is_connected)
+        if self.camera_manager.cameras:
+            self.health_monitor.register_check("camera", self.camera_manager.all_connected)
+        if self.io_manager is not None:
+            self.health_monitor.register_check("gpio", self.io_manager.is_connected)
 
     def _on_health_change(self, status):
         self.update_status()
 
-    def start(self, width=1920, height=1080):
-        camera_ok = io_ok = False
+    def start(self, width=1920, height=1080, fps=15):
+        camera_ok = True
+        io_ok = not self.io_required
         try:
-            camera_ok = self.camera_manager.connect_all(width, height)
-            time.sleep(1)
-            io_ok = self.io_manager.connect()
-            time.sleep(1)
+            if self.camera_manager.cameras:
+                camera_ok = self.camera_manager.connect_all(width, height, fps)
+            if self.io_manager is not None:
+                try:
+                    io_ok = bool(self.io_manager.connect())
+                except Exception:
+                    logger.exception("Failed to connect project IO")
+                    io_ok = False
             self.health_monitor.start()
             self._running = True
             self.update_status(program_status="RUNNING")
-        except Exception as e:
-            logger.exception("Failed to start platform runtime: %s", e)
+        except Exception:
+            logger.exception("Failed to start platform runtime")
         return bool(camera_ok and io_ok)
 
     def hardware_ready(self) -> bool:
-        details = self.health_monitor.status["details"]
-        cams = details.get("camera")
-        if not self._running or not isinstance(cams, dict):
+        if not self._running:
             return False
-        return bool(cams) and all(cams.values()) and bool(details.get("gpio"))
+        details = self.health_monitor.status.get("details", {})
+        if self.camera_manager.cameras:
+            cameras = details.get("camera")
+            if not isinstance(cameras, dict) or not cameras or not all(cameras.values()):
+                return False
+        if self.io_required and not bool(details.get("gpio")):
+            return False
+        return True
 
     def run(self):
         if not self._running:
@@ -77,41 +107,41 @@ class PlatformRuntime:
         self._running = False
         try:
             self.project.shutdown(self)
-        except AttributeError:
-            pass
+        except Exception:
+            logger.exception("Project shutdown failed")
         self.health_monitor.stop()
         self.camera_manager.disconnect_all()
-        if hasattr(self.io_manager, "closeIO"):
-            self.io_manager.closeIO()
-        elif hasattr(self.io_manager, "close"):
-            self.io_manager.close()
+        if self.io_manager is not None:
+            close = getattr(self.io_manager, "close", None)
+            if not callable(close):
+                close = getattr(self.io_manager, "closeIO", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.exception("Failed to close project IO")
         self.update_status(program_status="OFF")
-        self.reporter.close()
+        close_reporter = getattr(self.reporter, "close", None)
+        if callable(close_reporter):
+            close_reporter()
 
     def update_status(self, **kwargs):
-        details = self.health_monitor.status["details"]
-        if not self._running:
-            camera_statuses = {cam_id: False for cam_id in self.camera_manager.cameras}
-            gpio_connected = False
-        elif isinstance(details.get("camera"), dict):
+        details = self.health_monitor.status.get("details", {})
+        camera_statuses = {}
+        if isinstance(details.get("camera"), dict):
             camera_statuses = dict(details["camera"])
-            gpio_connected = bool(details.get("gpio"))
-        else:
+        elif self.camera_manager.cameras:
             camera_statuses = {
-                cam_id: (cam is not None and getattr(cam, "is_connected", lambda: False)())
-                for cam_id, cam in self.camera_manager.cameras.items()
+                camera_id: bool(cam and getattr(cam, "is_connected", lambda: False)())
+                for camera_id, cam in self.camera_manager.cameras.items()
             }
-            gpio_connected = bool(
-                self.io_manager.is_connected()
-                if callable(getattr(self.io_manager, "is_connected", None))
-                else getattr(self.io_manager, "is_connected", False)
-            )
 
         status = {
             "program_status": "RUNNING" if self._running else "OFF",
             "camera": camera_statuses,
-            "gpio": gpio_connected,
         }
+        if self.io_manager is not None:
+            status["gpio"] = bool(details.get("gpio", self.io_manager.is_connected()))
         status.update(self.project.status_payload())
         status.update(kwargs)
 
@@ -121,8 +151,12 @@ class PlatformRuntime:
             self._last_reported = dict(status)
         self.reporter.report(status)
 
-    def run_cycle(self, pipeline_id: str, cycle_id: Optional[str] = None,
-                  cam_active: Optional[List[str]] = None) -> InspectionContext:
+    def run_cycle(
+        self,
+        pipeline_id: str,
+        cycle_id: Optional[str] = None,
+        cam_active: Optional[List[str]] = None,
+    ) -> InspectionContext:
         context = InspectionContext(
             project_id=self.project.project_id,
             pipeline_id=pipeline_id,
