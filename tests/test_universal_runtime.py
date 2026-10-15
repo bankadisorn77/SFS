@@ -1,4 +1,8 @@
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Program"))
 
 from platform_core import CameraManager, HealthMonitor, PlatformRuntime
 from platform_core.project import ProjectAdapter
