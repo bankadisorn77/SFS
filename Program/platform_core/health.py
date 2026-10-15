@@ -100,7 +100,8 @@ class HealthMonitor:
         while not self._stop_event.is_set():
             status: Dict[str, Any] = {}
             camera_statuses = {}
-            if self.camera_manager is not None:
+            camera_active = bool(self.camera_manager is not None and getattr(self.camera_manager, "active", True))
+            if camera_active:
                 for camera_id, camera in self.camera_manager.cameras.items():
                     camera_statuses[camera_id] = self._connected(camera)
                 status["camera"] = camera_statuses
@@ -136,7 +137,7 @@ class HealthMonitor:
                 except Exception:
                     logger.exception("[HealthMonitor] IO reconnect failed")
 
-            if self.camera_manager is not None and any(not ok for ok in camera_statuses.values()):
+            if camera_active and self.camera_manager is not None and any(not ok for ok in camera_statuses.values()):
                 try:
                     self.camera_manager.reconnect_disconnected()
                 except Exception:
