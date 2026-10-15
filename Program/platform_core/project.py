@@ -35,6 +35,10 @@ class ProjectAdapter(ABC):
             "Projects with cameras must implement create_camera(definition)."
         )
 
+    def connect_cameras_on_start(self) -> bool:
+        """Whether Runtime should connect camera adapters during startup."""
+        return True
+
     def requires_io(self) -> bool:
         """Whether IO hardware is mandatory for this project."""
         return False
