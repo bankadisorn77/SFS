@@ -113,6 +113,17 @@ class HealthMonitor:
                     io_alive = False
                 status["gpio"] = io_alive
 
+            # Run project-defined checks as well as the standard hardware checks.
+            # Standard camera/IO checks above publish richer per-device details.
+            for name, check in self._monitors.items():
+                if name in ("camera", "gpio"):
+                    continue
+                try:
+                    status[name] = bool(check())
+                except Exception:
+                    logger.exception("Health check failed for %s", name)
+                    status[name] = False
+
             self._publish(status)
 
             if self.io_manager is not None and not io_alive:
