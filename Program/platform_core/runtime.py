@@ -8,7 +8,6 @@ from .context import InspectionContext
 from .health import HealthMonitor
 from .pipeline import PipelineEngine
 from .project import ProjectAdapter
-from .storage import ImageStorage
 
 logger = logging.getLogger("PlatformRuntime")
 
@@ -42,7 +41,11 @@ class PlatformRuntime:
             check_interval=health_check_interval,
         )
         storage = project.storage_definition().get("base_dir") if hasattr(project, "storage_definition") else None
-        self.storage = ImageStorage(storage) if storage else None
+        self.storage = None
+        if storage:
+            # Keep optional image dependencies out of projects that do not store frames.
+            from .storage import ImageStorage
+            self.storage = ImageStorage(storage)
         self._running = False
         self._last_reported = None
         self._status_lock = threading.Lock()
