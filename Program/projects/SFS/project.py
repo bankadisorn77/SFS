@@ -122,6 +122,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.io = IO(runtime.io_manager, self.config)
         self.io.reset_outputs()
         self.io.set_state_machine(True)
+        self.setFB_output_error(False)
         self._last_status["machine_status"] = True
         self._remove_stream_control()
         self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)
@@ -198,6 +199,8 @@ class SfsPokaYokeProject(ProjectAdapter):
         if self._hw_synced and state == self._hw_prev:
             return
         ok = self.io.set_state_machine(light)
+        print(light)
+        self.setFB_output_error(False if light else True)
         if not ready:
             ok = self.io.set_alarm(True) and ok
             self._hw_fault = True
@@ -336,3 +339,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         except OSError:
             pass
         return True
+
+    def setFB_output_error(self,value=False):
+        self.io.set_FB_trick(value=value,round_idx=0)
+        self.io.set_FB_trick(value=value,round_idx=1)

@@ -7,6 +7,7 @@ class IO:
         self.config = config
         self.cam_channel_map = {"cam_1": 0, "cam_2": 1, "cam_3": 2}
         self.round_channel_map = ["FB1", "FB2"]
+        self.set_state_machine(False)
 
 
     # ==========================
@@ -46,6 +47,7 @@ class IO:
 
     def set_FB_trick(self, value: bool, round_idx: int = 0):
         ch = self.config.get_output_channel(self.round_channel_map[round_idx], default=0)
+        print(value,round_idx,ch)
         return self.io.write_output(ch, bool(value))
    
             

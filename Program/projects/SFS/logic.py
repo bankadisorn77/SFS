@@ -8,7 +8,6 @@ class Logic:
         self.state = 1
 
     def evaluate(self, info: dict, rule: dict) -> tuple[bool, str]:
-        print(info)
         if not info or info.get("status") != "OK":
             return False, "Detection Failed (< 2 Holes)"
 
