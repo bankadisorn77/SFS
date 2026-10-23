@@ -141,21 +141,21 @@ class Agent:
 
     def _republish_worker(self):
         while True:
-            time.sleep(10)
+            time.sleep(5)
             try:
                 if not self.MQ:
                     continue
                 if self.get_worker_pid() is None:
                     self.last_status = None
-                    status = self._off_status()
+                    status = self._off_status(running=False)
                 elif self.last_status:
                     status = dict(self.last_status)
                     status["last_update"] = time.time()
                 else:
-                    continue
+                    status = self._off_status(running=True)
                 self.MQ.statusMsg(msg=status, api_key=self.api_key)
             except Exception:
-                pass
+                logger.exception("Republish status failed")
 
     def _tail_log_worker(self):
         while True:
@@ -415,7 +415,7 @@ class Agent:
 
 
 if __name__ == "__main__":
-    # ตรวจสอบ Single Instance ทันที
+
     lock_file = "/tmp/sfs_agent.lock"
     lock_fd = open(lock_file, "w")
     try:
@@ -424,7 +424,6 @@ if __name__ == "__main__":
         logger.warning("Another instance of agent.py is already running. Exiting.")
         sys.exit(0)
 
-    # หน่วงเวลารอเซอร์วิสเฉพาะเมื่อส่งแฟล็ก --delay (สำหรับตอนเปิดเครื่อง)
     if "--delay" in sys.argv:
         logger.info("Delay flag detected. Waiting 30s for system services...")
         time.sleep(30)

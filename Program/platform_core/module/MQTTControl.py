@@ -198,11 +198,13 @@ class MQTT:
         pass
 
   def publish(self, msg, i):
-    if self.MQTTConnected:
-      try:
+    if not self.MQTTConnected:
+        logger.warning("MQTT not connected, skip publish (topic index %s)", i)
+        return
+    try:
         topic, _ = self.topic()
-        self.mqtt_client.publish(topic[i], msg)
-      except Exception as e:
+        self.mqtt_client.publish(topic[i], msg, qos=0, retain=(i == 0))
+    except Exception as e:
         logger.warning("MQTT publish error: %s", e)
 
   # ==================== MQTT Events ====================

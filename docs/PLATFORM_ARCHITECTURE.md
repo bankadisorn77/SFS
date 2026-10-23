@@ -51,3 +51,7 @@ Each camera can point to a different pipeline. A pipeline may also be shared by 
 ```
 
 The platform core must not contain BackGrinding-specific state names, IO meanings, camera counts, or business rules.
+
+
+sudo lsusb -v | grep -iE "Bus|MaxPower"
+lsusb -t

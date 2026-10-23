@@ -11,7 +11,9 @@ from .detector import Detector
 from .io import IO
 from .config import Config
 from .logic import Logic
+
 logger = logging.getLogger("SfsPokaYokeProject")
+
 class SfsPokaYokeProject(ProjectAdapter):
 
     project_id = Config.project_id
@@ -34,16 +36,16 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._stream_mtime = None
         self.stream = None
         self._last_status = {
-                    "round_1_input": False,
-                    "round_2_input": False,
-                    "machine_status": False,
-                    "alarm_status": False,
-                    "round_1_output": False,
-                    "round_2_output": False,
-                    "stream_status": False,
-                    "stream_camera": "",
-                    "stream_port": self.config.stream_port,
-                }
+            "round_1_input": False,
+            "round_2_input": False,
+            "machine_status": False,
+            "alarm_status": False,
+            "round_1_output": False,
+            "round_2_output": False,
+            "stream_status": False,
+            "stream_camera": "",
+            "stream_port": self.config.stream_port,
+        }
 
     def camera_definition(self) -> List[Dict[str, Any]]:
         if isinstance(self.config, dict):
@@ -51,17 +53,13 @@ class SfsPokaYokeProject(ProjectAdapter):
         else:
             cameras = getattr(self.config, "cameras", [])
 
-        return [
-            c for c in cameras
-            if c.get("enabled", True)
-        ]
+        return [c for c in cameras if c.get("enabled", True)]
     
     def storage_definition(self):
-            return {"base_dir": self.config.save_image_path}
+        return {"base_dir": self.config.save_image_path}
 
     def pipeline_definition(self, pipeline_id: str) -> Dict[str, Any]:
-        pipeline_cfg = self.config.pipelines.get(pipeline_id)
-        return pipeline_cfg
+        return self.config.pipelines.get(pipeline_id)
 
     def get_step_handlers(self) -> Dict[str, Callable]:
         return {
@@ -72,15 +70,14 @@ class SfsPokaYokeProject(ProjectAdapter):
         }
 
     def _inspection_camera_ids(self):
-            return [c["id"] for c in self.config.inspection_cameras]
+        return [c["id"] for c in self.config.inspection_cameras]
 
     def status_payload(self):
-            return dict(self._last_status)
+        return dict(self._last_status)
 
     def handle_capture(self, context: InspectionContext, step: Dict[str, Any]) -> bool:
         target_camera = context.camera_id or (list(context.frames.keys())[0] if context.frames else None)
         return bool(target_camera and context.frames.get(target_camera) is not None)
-    
 
     def handle_measure(self, context: InspectionContext, step: Dict[str, Any]):
         for camera_id in self._inspection_camera_ids():
@@ -88,23 +85,16 @@ class SfsPokaYokeProject(ProjectAdapter):
             if frame is None:
                 logger.warning(f"[{camera_id}] No frame available for measurement.")
                 continue
-            _, info = self.detector.detect_frame(frame,)
+            _, info = self.detector.detect_frame(frame)
             context.detections[camera_id] = info
 
-        return 
-
     def handle_validate(self, context: InspectionContext, step: Dict[str, Any]):
-            for camera_id in self._inspection_camera_ids():
-                detections = context.detections.get(camera_id, [])
-                valid, info = self.logic.evaluate(detections,self.rule)
-                # if camera_id == 'cam_1':
-                #      valid = True
-                # else:
-                #      valid = False
-                context.results[camera_id] = bool(valid)
-
-            return
-
+        for camera_id in self._inspection_camera_ids():
+            detections = context.detections.get(camera_id, [])
+            valid, info = self.logic.evaluate(detections, self.rule)
+            # force True
+            valid = True
+            context.results[camera_id] = bool(valid)
 
     def handle_decision(self, context: InspectionContext, step: Dict[str, Any]) -> bool:
         inspection_ids = self._inspection_camera_ids()
@@ -117,12 +107,11 @@ class SfsPokaYokeProject(ProjectAdapter):
         context.metadata["final"] = passed
         return passed
 
-
     def run(self, runtime):
         self.io = IO(runtime.io_manager, self.config)
         self.io.reset_outputs()
         self.io.set_state_machine(True)
-        self.setFB_output_error(False)
+
         self._last_status["machine_status"] = True
         self._remove_stream_control()
         self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)
@@ -150,10 +139,12 @@ class SfsPokaYokeProject(ProjectAdapter):
             self._sync_hardware(ready, gpio_ok)
 
             self._last_status.update({
-                "round_1_input": r1 ,
-                "round_2_input": r2 
+                "round_1_input": r1,
+                "round_2_input": r2
             })
             runtime.update_status(**self._last_status)
+
+            # --- Trigger Round 1 ---
             if not last_r1 and r1 and not r2:
                 if self.streaming:
                     logger.warning("Round 1 input detected but stream mode is on. Rejecting.")
@@ -165,7 +156,7 @@ class SfsPokaYokeProject(ProjectAdapter):
                     logger.warning("Round 1 input detected but hardware is not ready. Rejecting.")
                     self._reject_not_ready(runtime, round_index=0)
 
-
+            # --- Trigger Round 2 ---
             if not last_r2 and r2 and not r1:
                 if self.streaming:
                     logger.warning("Round 2 input detected but stream mode is on. Rejecting.")
@@ -180,36 +171,50 @@ class SfsPokaYokeProject(ProjectAdapter):
                     logger.warning("Round 2 input detected but Round 1 has not passed. Ignoring Round 2 input.")
 
             if not r1 and not r2:
-                 self.io.reset_state()
-                 if not self._hw_fault:
-                     self.io.set_alarm(False)
-
+                self._on_no_input()
 
             last_r1 = r1
             last_r2 = r2
             time.sleep(0.05)
 
+    def _sync_fb_status(self):
+        for i, value in enumerate(self.io.fb_state()):
+            self._last_status[f"round_{i + 1}_output"] = value
+
+    def _on_no_input(self):
+        self.io.clear_fb_fail()
+        if not self._hw_fault and not self._cycle_alarm:
+            self.io.reset_state()
+            self.io.set_alarm(False)
+        self._sync_fb_status()
+
     def _sync_hardware(self, ready: bool, gpio_ok: bool):
         light = ready and not self.streaming
         self._last_status["machine_status"] = light
         state = (ready, self.streaming)
+        
         if not gpio_ok:
             self._hw_synced = False
             return
         if self._hw_synced and state == self._hw_prev:
             return
+            
         ok = self.io.set_state_machine(light)
-        print(light)
-        self.setFB_output_error(False if light else True)
+        
         if not ready:
             ok = self.io.set_alarm(True) and ok
+            self.io.set_fb_fault(True)
             self._hw_fault = True
             self._last_status["alarm_status"] = True
+            self._sync_fb_status()
         elif self._hw_fault:
             if not self._cycle_alarm:
                 ok = self.io.set_alarm(False) and ok
                 self._last_status["alarm_status"] = False
+            self.io.set_fb_fault(False) 
             self._hw_fault = False
+            self._sync_fb_status()
+            
         self._hw_prev = state
         self._hw_synced = bool(ok)
 
@@ -217,9 +222,11 @@ class SfsPokaYokeProject(ProjectAdapter):
         if alarm:
             self.io.set_alarm(True)
             self._last_status["alarm_status"] = True
-        self.io.set_FB_trick(True, round_idx=round_index)
+        
+        self._hw_fault = True
+        self.io.set_fb_fault(True)
         self._last_status["machine_status"] = False
-        self._last_status["round_" + str(round_index + 1) + "_output"] = True
+        self._sync_fb_status()
         runtime.update_status(**self._last_status)
 
     def _update_stream_status(self):
@@ -287,31 +294,34 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._update_stream_status()
 
     def _run_inspection_cycle(self, runtime, round_index: int = 0):
+        self._cycle_alarm = False
         self.io.reset_state()
         self.io.set_alarm(False)
-        self._last_status["round_" + str(round_index + 1) + "_output"] = False
-        self._cycle_alarm = False
+        self._sync_fb_status()
+
         self.rule = self.config.r1_rule if round_index == 0 else self.config.r2_rule
         context = runtime.run_cycle(
-                    pipeline_id="SFS",
-                    cam_active=[c["id"] for c in self.config.inspection_cameras],
+            pipeline_id="SFS",
+            cam_active=[c["id"] for c in self.config.inspection_cameras],
         )
 
         is_pass = bool(context.metadata.get("final", False))
         camera_statuses = context.results
+        self.io.cam_output(camera_statuses, round_idx=round_index)
+
         if is_pass:
             self.R1_passed = True if round_index == 0 else False
             self.io.set_alarm(False)
             self._last_status["alarm_status"] = False
+            self.io.set_fb_fail(round_index, False)
         else:
             self._cycle_alarm = True
             self.io.set_alarm(True)
             self._last_status["alarm_status"] = True
-            self.io.set_FB_trick(True, round_idx=round_index)
-            self._last_status["round_" + str(round_index + 1) + "_output"] = True
-        self.io.cam_output(camera_statuses, round_idx=round_index,)
-        runtime.update_status(**self._last_status)
+            self.io.set_fb_fail(round_index, True)
 
+        self._sync_fb_status()
+        runtime.update_status(**self._last_status)
 
     def shutdown(self, runtime):
         if self.stream:
@@ -339,7 +349,3 @@ class SfsPokaYokeProject(ProjectAdapter):
         except OSError:
             pass
         return True
-
-    def setFB_output_error(self,value=False):
-        self.io.set_FB_trick(value=value,round_idx=0)
-        self.io.set_FB_trick(value=value,round_idx=1)

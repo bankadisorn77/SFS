@@ -1,22 +1,58 @@
 {
   "project_id": "SFS",
   "device_id": "UTL-Ai-SFS(Dev)",
-  "ip": "169.254.38.213",
+  "ip": "172.19.51.54",
   "mac": "48:21:0B:3D:2D:7B",
   "api_port": 8080,
+  "stream_port": 8081,
   "api_key": "",
   "MQTTServer": "10.151.27.1",
   "server_url": "169.254.26.65",
   "save_image_path": "saved_images_output",
   "stop_flag_path": "/home/utac/Project/SFS-main/stop_worker.flag",
   "inputChannel": [
-    {"name": "round_1", "channel": 0},
-    {"name": "round_2", "channel": 1}
+    {
+      "name": "round_1",
+      "channel": 0
+    },
+    {
+      "name": "round_2",
+      "channel": 1
+    }
   ],
   "outputChannel": [
-    {"name": "cam_1", "channel": 0}, {"name": "cam_2", "channel": 1}, {"name": "cam_3", "channel": 2},
-    {"name": "round", "channel": 3}, {"name": "alarm", "channel": 4}, {"name": "state_machine", "channel": 5},
-    {"name": "FB1", "channel": 6}, {"name": "FB2", "channel": 7}
+    {
+      "name": "cam_1",
+      "channel": 3
+    },
+    {
+      "name": "cam_2",
+      "channel": 4
+    },
+    {
+      "name": "cam_3",
+      "channel": 5
+    },
+    {
+      "name": "round",
+      "channel": 2
+    },
+    {
+      "name": "alarm",
+      "channel": 6
+    },
+    {
+      "name": "state_machine",
+      "channel": 7
+    },
+    {
+      "name": "FB1",
+      "channel": 0
+    },
+    {
+      "name": "FB2",
+      "channel": 1
+    }
   ],
   "cameraAOI": {
     "width": 1920,
