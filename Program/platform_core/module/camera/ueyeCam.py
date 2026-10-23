@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import weakref
+import ctypes
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,28 @@ class UeyeCamera:
 
             self._determine_color_mode()
             ueye.is_SetColorMode(self.hCam, self.m_nColorMode)
+
+            # 1. Fix Pixel Clock 
+            pixel_clock = ueye.c_uint(24) 
+            ueye.is_PixelClock(self.hCam, ueye.IS_PIXELCLOCK_CMD_SET, pixel_clock, ueye.sizeof(pixel_clock))
+
+            # 2. Fix Exposure & Gain 
+            auto_off = ueye.c_double(0)
+            
+            ueye.is_SetAutoParameter(self.hCam, ueye.IS_SET_ENABLE_AUTO_SHUTTER, auto_off, auto_off)
+            ueye.is_SetAutoParameter(self.hCam, ueye.IS_SET_ENABLE_AUTO_GAIN, auto_off, auto_off)
+            
+            # Exposure 
+            exposure_ms = ueye.c_double(10.0) 
+            ueye.is_Exposure(self.hCam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE, exposure_ms, ueye.sizeof(exposure_ms))
+
+            # 3. Lock Focus 
+            manual_focus_val = ueye.c_uint(255)
+            ueye.is_Focus(self.hCam, ueye.FOC_CMD_SET_MANUAL_FOCUS, manual_focus_val, ueye.sizeof(manual_focus_val))
+
+
+            w, h = self._set_aoi(self.x, self.y, target_width, target_height)
+            self.width, self.height = w, h
 
             w, h = self._set_aoi(self.x, self.y, target_width, target_height)
             self.width, self.height = w, h

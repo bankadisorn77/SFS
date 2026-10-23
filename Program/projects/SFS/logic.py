@@ -3,13 +3,25 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# ข้อความเมื่อ detector ตรวจไม่สำเร็จ (key = info["status"] จาก detector.py)
+FAIL_MESSAGES = {
+    "NO_FRAME": "Detection Failed (No frame)",
+    "NOT_ENOUGH_HOLES": "Detection Failed (< 2 Holes)",
+    "FAIL_POINTS": "Detection Failed (Cannot fit top edge)",
+    "ERROR": "Detection Failed (Detector error)",
+}
+
+
 class Logic:
     def __init__(self):
         self.state = 1
 
     def evaluate(self, info: dict, rule: dict) -> tuple[bool, str]:
-        if not info or info.get("status") != "OK":
-            return False, "Detection Failed (< 2 Holes)"
+        logger.debug("evaluate info=%s", info)
+        info = info or {}
+        status = info.get("status")
+        if status != "OK":
+            return False, FAIL_MESSAGES.get(status, f"Detection Failed ({status or 'No result'})")
 
         angle = info.get("angle_deg", 0.0)
         mid_y = info.get("mid_y", 0)
