@@ -111,7 +111,7 @@ class Agent:
             try:
                 ok = asyncio.run(self.api.register())
             except Exception as e:
-                logger.warning("Register error: %s", e)
+                # logger.warning("Register error: %s", e)
                 ok = False
             if ok:
                 logger.info("API server connected.")

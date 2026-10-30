@@ -7,7 +7,8 @@ from platform_core.context import InspectionContext
 from platform_core.module.stream import StreamServer
 import logging
 import asyncio
-from .detector import Detector
+from .slot_detector import SlotDetector
+from .frame_alinement import FrameINIT
 from .io import IO
 from .config import Config
 from .logic import Logic
@@ -23,7 +24,10 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.config = Config()
         self.device_id = self.config.device_id
         self.cameras = self.config.cameras
-        self.detector = Detector()
+        ref_dir = getattr(self.config, "reference_dir", "refs")
+        self.frame_init = FrameINIT(config=self.config, save_dir=ref_dir)
+        self.detector = SlotDetector(ref_dir=ref_dir)
+        self.round_index = 0
         self.rule = None
         self.io = None
         self.R1_passed = False
@@ -85,14 +89,14 @@ class SfsPokaYokeProject(ProjectAdapter):
             if frame is None:
                 logger.warning(f"[{camera_id}] No frame available for measurement.")
                 continue
-            _, info = self.detector.detect_frame(frame)
+            info = self.detector.check(frame, camera_id, self.round_index + 1)
             context.detections[camera_id] = info
 
     def handle_validate(self, context: InspectionContext, step: Dict[str, Any]):
         for camera_id in self._inspection_camera_ids():
             detections = context.detections.get(camera_id, [])
             valid, info = self.logic.evaluate(detections, self.rule)
-            # force True
+            # Demo force True
             valid = True
             context.results[camera_id] = bool(valid)
 
@@ -143,9 +147,15 @@ class SfsPokaYokeProject(ProjectAdapter):
                 "round_2_input": r2
             })
             runtime.update_status(**self._last_status)
+            if r1 and r2:
+                if not (last_r1 and last_r2):
+                    if ready:
+                        logger.info("Double input detected (Round 1 + Round 2). Triggering Init Mode.")
+                        self._run_init_cycle(runtime)
+                    else:
+                        logger.warning("Double input detected but hardware not ready.")
 
-            # --- Trigger Round 1 ---
-            if not last_r1 and r1 and not r2:
+            elif not last_r1 and r1 and not r2:
                 if self.streaming:
                     logger.warning("Round 1 input detected but stream mode is on. Rejecting.")
                     self._reject_not_ready(runtime, round_index=0, alarm=False)
@@ -156,8 +166,7 @@ class SfsPokaYokeProject(ProjectAdapter):
                     logger.warning("Round 1 input detected but hardware is not ready. Rejecting.")
                     self._reject_not_ready(runtime, round_index=0)
 
-            # --- Trigger Round 2 ---
-            if not last_r2 and r2 and not r1:
+            elif not last_r2 and r2 and not r1:
                 if self.streaming:
                     logger.warning("Round 2 input detected but stream mode is on. Rejecting.")
                     self._reject_not_ready(runtime, round_index=1, alarm=False)
@@ -286,7 +295,9 @@ class SfsPokaYokeProject(ProjectAdapter):
             if camera_id is None or manager.get(camera_id) is None:
                 logger.warning(f"Stream requested for unknown camera: {camera_id}")
             elif manager.start_alignment_live(camera_id):
-                self.streaming = True
+                #self.streaming = True
+                self.streaming = False
+
                 self._stream_cam = camera_id
                 logger.info(f"Stream mode ON ({camera_id}).")
             else:
@@ -299,6 +310,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.io.set_alarm(False)
         self._sync_fb_status()
 
+        self.round_index = round_index
         self.rule = self.config.r1_rule if round_index == 0 else self.config.r2_rule
         context = runtime.run_cycle(
             pipeline_id="SFS",
@@ -322,6 +334,40 @@ class SfsPokaYokeProject(ProjectAdapter):
 
         self._sync_fb_status()
         runtime.update_status(**self._last_status)
+        
+    def _run_init_cycle(self, runtime):
+        logger.info("[INIT MODE] Calibration cycle started...")
+        self.io.reset_state()
+        self.io.set_alarm(False)
+        context = runtime.run_cycle(
+            pipeline_id="SFS",
+            cam_active=[c["id"] for c in self.config.inspection_cameras],
+        )
+
+        all_success = True
+        for cam_id in self._inspection_camera_ids():
+            frame = context.frames.get(cam_id)
+            if frame is None:
+                logger.error(f"[INIT MODE] [{cam_id}] No frame received for Init.")
+                all_success = False
+                continue
+            
+            res = self.frame_init.calibrate(frame, cam_id)
+            if res["status"] == "OK":
+                path = self.frame_init.save_reference(res["reference"])
+                logger.info(f"[INIT MODE] [{cam_id}] Reference saved: {path}")
+            else:
+                logger.error(f"[INIT MODE] [{cam_id}] Failed to build reference: {res}")
+                all_success = False
+
+        if all_success:
+            self.io.set_state_machine(True)
+            logger.info("[INIT MODE] Completed successfully for all cameras.")
+        else:
+            self.io.set_alarm(True)
+            time.sleep(0.5)
+            self.io.set_alarm(False)
+            logger.warning("[INIT MODE] Completed with errors.")
 
     def shutdown(self, runtime):
         if self.stream:

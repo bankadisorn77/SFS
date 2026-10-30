@@ -46,14 +46,22 @@ class Config:
             {"name": "FB2", "channel": 7},
         ]
         self.cameraAOI = {"width": 1920, "height": 1080}
-        self.r1_rule = {"width": 1920, "height": 1080, "angle": 7}
-        self.r2_rule = {"width": 1920, "height": 1080, "angle": 7}
+
+        # 1. ปรับ default โครงสร้าง referenceLine แยกตาม cam_1, cam_2, cam_3
+        self.referenceLine = {
+            "cam_1": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
+            "cam_2": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
+            "cam_3": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
+        }
+
+        self.r1_rule = {"width": 1920, "height": 1080, "angle": 10}
+        self.r2_rule = {"width": 1920, "height": 1080, "angle": 10}
 
         self.cameras = [
             {
                 "id": "cam_1",
                 "driver": "ueye",
-                "hardware_index": 0,
+                "hardware_index": 1,
                 "enabled": True,
                 "pipeline": "SFS",
             }
@@ -64,6 +72,7 @@ class Config:
                 "steps": [
                     {"id": "capture", "type": "capture"},
                     {"id": "measure", "type": "measure"},
+                    {"id": "validate", "type": "validate"},
                     {"id": "decision", "type": "decision"},
                 ],
             },
@@ -134,6 +143,7 @@ class Config:
                 "inputChannel",
                 "outputChannel",
                 "cameraAOI",
+                "referenceLine",
                 "r1_rule",
                 "r2_rule",
                 "cameras",
@@ -164,6 +174,7 @@ class Config:
             "inputChannel": self.inputChannel,
             "outputChannel": self.outputChannel,
             "cameraAOI": self.cameraAOI,
+            "referenceLine": self.referenceLine,
             "r1_rule": self.r1_rule,
             "r2_rule": self.r2_rule,
             "cameras": self.cameras,
@@ -191,6 +202,7 @@ class Config:
         "inputChannel": list,
         "outputChannel": list,
         "cameraAOI": dict,
+        "referenceLine": dict,
         "r1_rule": dict,
         "r2_rule": dict,
         "cameras": list,
@@ -227,8 +239,19 @@ class Config:
             self.api_port = int(data["api_port"])
         if data.get("stream_port") is not None:
             self.stream_port = int(data["stream_port"])
+
+        # 2. ปรับการอัปเดต referenceLine ให้ merge รายกล้อง ไม่ทับกล้องอื่น
+        if "referenceLine" in data and isinstance(data["referenceLine"], dict):
+            if not isinstance(self.referenceLine, dict):
+                self.referenceLine = {}
+            for cam_key, line_val in data["referenceLine"].items():
+                self.referenceLine[cam_key] = line_val
+
         for name, kind in self._STRUCT_FIELDS.items():
+            if name == "referenceLine":
+                continue  # ข้ามเพราะจัดการแบบ merge ด้านบนแล้ว
             if isinstance(data.get(name), kind):
                 setattr(self, name, data[name])
+                
         self.save()
         return True

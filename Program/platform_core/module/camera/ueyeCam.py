@@ -33,6 +33,7 @@ class UeyeCamera:
         self.width = 0
         self.height = 0
         self.target_fps = 15
+        self.manual_focus = 255
         self.req_w = 1920
         self.req_h = 1080
         self.nBitsPerPixel_py = 0
@@ -105,8 +106,7 @@ class UeyeCamera:
             ueye.is_Exposure(self.hCam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE, exposure_ms, ueye.sizeof(exposure_ms))
 
             # 3. Lock Focus 
-            manual_focus_val = ueye.c_uint(255)
-            ueye.is_Focus(self.hCam, ueye.FOC_CMD_SET_MANUAL_FOCUS, manual_focus_val, ueye.sizeof(manual_focus_val))
+            self._lock_focus()
 
 
             w, h = self._set_aoi(self.x, self.y, target_width, target_height)
@@ -136,8 +136,12 @@ class UeyeCamera:
             return False
 
     def snap_frame(self, timeout_ms: int = 1000):
-        if not self.hCamConnected or self.is_streaming:
+        if not self.hCamConnected:
             return None
+
+        if self.is_streaming:
+            return self.get_latest_frame()
+
         with self.io_lock:
             for attempt in range(3):
                 with UeyeCamera._capture_lock:
@@ -248,6 +252,30 @@ class UeyeCamera:
                 ret = ueye.is_FreezeVideo(self.hCam, 500)
             finally:
                 UeyeCamera._capture_lock.release()
+
+            if ret == 178:
+                self._probe_fails = 0
+                self._last_probe_ok = True
+                self._last_probe_time = time.time()
+                return True
+
+            self._last_probe_time = time.time()
+            if ret != ueye.IS_SUCCESS:
+                self._probe_fails += 1
+                limit = 2 if ret == -1 else 5
+                logger.warning(
+                    "Camera %s: probe failed ret=%s (%s/%s).",
+                    self.camera_id,
+                    ret,
+                    self._probe_fails,
+                    limit,
+                )
+                if self._probe_fails >= limit:
+                    self.hCamConnected = False
+                    self._last_probe_ok = False
+                    return False
+                return True
+
             self._last_probe_time = time.time()
             if ret != ueye.IS_SUCCESS:
                 self._probe_fails += 1
@@ -279,6 +307,63 @@ class UeyeCamera:
             self.m_nColorMode.value = ueye.IS_CM_MONO8
             self.nBitsPerPixel_ctypes.value = 8
             self.bytes_per_pixel = 1
+
+    def _focus_cmd(self, cmd, value=None):
+        if value is None:
+            return ueye.is_Focus(self.hCam, cmd, None, 0), None
+        param = ueye.c_uint(value)
+        ret = ueye.is_Focus(self.hCam, cmd, param, ueye.sizeof(param))
+        return ret, param.value
+
+    def _lock_focus(self) -> bool:
+        cid = self.camera_id
+        try:
+            ret, caps = self._focus_cmd(ueye.FOC_CMD_GET_CAPABILITIES, 0)
+            if ret != ueye.IS_SUCCESS:
+                logger.info("Camera %s: no focus control (caps ret=%s), skip focus lock.", cid, ret)
+                return False
+            if not (caps & ueye.FOC_CAP_MANUAL_SUPPORTED):
+                logger.info("Camera %s: manual focus not supported (caps=%s), skip.", cid, caps)
+                return False
+
+            ok = True
+
+            if caps & ueye.FOC_CAP_AUTOFOCUS_SUPPORTED:
+                ret, _ = self._focus_cmd(ueye.FOC_CMD_SET_DISABLE_AUTOFOCUS)
+                if ret != ueye.IS_SUCCESS:
+                    logger.warning("Camera %s: disable autofocus failed ret=%s.", cid, ret)
+                    ok = False
+
+            r_min, f_min = self._focus_cmd(ueye.FOC_CMD_GET_MANUAL_FOCUS_MIN, 0)
+            r_max, f_max = self._focus_cmd(ueye.FOC_CMD_GET_MANUAL_FOCUS_MAX, 0)
+            r_inc, f_inc = self._focus_cmd(ueye.FOC_CMD_GET_MANUAL_FOCUS_INC, 0)
+            target = int(self.manual_focus)
+            if r_min == ueye.IS_SUCCESS and r_max == ueye.IS_SUCCESS:
+                target = max(f_min, min(f_max, target))
+                if r_inc == ueye.IS_SUCCESS and f_inc > 0:
+                    target = f_min + round((target - f_min) / f_inc) * f_inc
+                    target = min(target, f_max)
+            else:
+                logger.warning("Camera %s: cannot read manual focus range (min ret=%s, max ret=%s); using %s as-is.",
+                               cid, r_min, r_max, target)
+
+            ret, _ = self._focus_cmd(ueye.FOC_CMD_SET_MANUAL_FOCUS, target)
+            if ret != ueye.IS_SUCCESS:
+                logger.warning("Camera %s: set manual focus=%s failed ret=%s.", cid, target, ret)
+                ok = False
+
+            r_af, af_on = self._focus_cmd(ueye.FOC_CMD_GET_AUTOFOCUS_ENABLE, 0)
+            r_pos, pos = self._focus_cmd(ueye.FOC_CMD_GET_MANUAL_FOCUS, 0)
+            logger.info("Camera %s: focus lock -> autofocus_enabled=%s (ret=%s), manual_pos=%s (ret=%s), "
+                        "target=%s, range=%s..%s step=%s.",
+                        cid, af_on, r_af, pos, r_pos, target, f_min, f_max, f_inc)
+            if r_af == ueye.IS_SUCCESS and af_on:
+                logger.warning("Camera %s: autofocus is STILL enabled after lock attempt.", cid)
+                return False
+            return ok
+        except Exception as e:
+            logger.exception("Camera %s: focus lock error: %s", cid, e)
+            return False
 
     def _set_aoi(self, x, y, w, h):
         self.rectAOI.s32X = ueye.int(x)

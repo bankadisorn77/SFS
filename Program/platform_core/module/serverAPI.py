@@ -69,7 +69,8 @@ class API_CALL():
                  logger.error("Server request timed out.")
                  return False
             except Exception as e:
-                logger.exception("Device registration failed: %s", e)
+                # logger.exception("Device registration failed: %s", e)
+                logger.error("Device registration failed.")
                 return False
 
     async def newAlarm(self,imagebase64 :str = None , detection_info :str = None, cycle_id=None, camera_id=None, pipeline_id=None):
