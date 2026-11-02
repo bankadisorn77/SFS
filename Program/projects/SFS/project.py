@@ -13,6 +13,11 @@ from .io import IO
 from .config import Config
 from .logic import Logic
 
+try:
+    from .demo_logger import save_result_image   # DEMO
+except ImportError:
+    save_result_image = None
+
 logger = logging.getLogger("SfsPokaYokeProject")
 
 class SfsPokaYokeProject(ProjectAdapter):
@@ -91,6 +96,8 @@ class SfsPokaYokeProject(ProjectAdapter):
                 continue
             info = self.detector.check(frame, camera_id, self.round_index + 1)
             context.detections[camera_id] = info
+            if save_result_image:   # DEMO
+                save_result_image(frame, camera_id, self.round_index + 1, info, self.rule, self.detector)
 
     def handle_validate(self, context: InspectionContext, step: Dict[str, Any]):
         for camera_id in self._inspection_camera_ids():

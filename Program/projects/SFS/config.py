@@ -2,13 +2,34 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class Config:
     project_id = "SFS"
+
+    _STR_FIELDS = (
+        "device_id",
+        "ip",
+        "mac",
+        "MQTTServer",
+        "server_url",
+        "save_image_path",
+        "api_key",
+        "project_id",
+        "stop_flag_path",
+    )
+    _STRUCT_FIELDS = {
+        "inputChannel": list,
+        "outputChannel": list,
+        "cameraAOI": dict,
+        "r1_rule": dict,
+        "r2_rule": dict,
+        "cameras": list,
+        "pipelines": dict,
+    }
 
     def __init__(self, path: Optional[str] = None):
         logger.info("Setting up config.")
@@ -46,13 +67,6 @@ class Config:
             {"name": "FB2", "channel": 7},
         ]
         self.cameraAOI = {"width": 1920, "height": 1080}
-
-        # 1. ปรับ default โครงสร้าง referenceLine แยกตาม cam_1, cam_2, cam_3
-        self.referenceLine = {
-            "cam_1": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
-            "cam_2": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
-            "cam_3": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
-        }
 
         self.r1_rule = {"width": 1920, "height": 1080, "angle": 10}
         self.r2_rule = {"width": 1920, "height": 1080, "angle": 10}
@@ -119,17 +133,7 @@ class Config:
             with self.path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            for name in (
-                "device_id",
-                "ip",
-                "mac",
-                "MQTTServer",
-                "server_url",
-                "save_image_path",
-                "api_key",
-                "project_id",
-                "stop_flag_path",
-            ):
+            for name in self._STR_FIELDS:
                 if name in data:
                     setattr(self, name, str(data[name]))
 
@@ -139,17 +143,8 @@ class Config:
             if "stream_port" in data:
                 self.stream_port = int(data["stream_port"])
 
-            for name in (
-                "inputChannel",
-                "outputChannel",
-                "cameraAOI",
-                "referenceLine",
-                "r1_rule",
-                "r2_rule",
-                "cameras",
-                "pipelines",
-            ):
-                if name in data:
+            for name, expected_type in self._STRUCT_FIELDS.items():
+                if name in data and isinstance(data[name], expected_type):
                     setattr(self, name, data[name])
 
             if not os.path.isabs(self.stop_flag_path):
@@ -174,7 +169,6 @@ class Config:
             "inputChannel": self.inputChannel,
             "outputChannel": self.outputChannel,
             "cameraAOI": self.cameraAOI,
-            "referenceLine": self.referenceLine,
             "r1_rule": self.r1_rule,
             "r2_rule": self.r2_rule,
             "cameras": self.cameras,
@@ -187,27 +181,6 @@ class Config:
         with tmp.open("w", encoding="utf-8") as f:
             json.dump(self.as_dict(), f, indent=2, ensure_ascii=False)
         os.replace(tmp, self.path)
-
-    _STR_FIELDS = (
-        "device_id",
-        "ip",
-        "mac",
-        "MQTTServer",
-        "server_url",
-        "save_image_path",
-        "api_key",
-        "project_id",
-    )
-    _STRUCT_FIELDS = {
-        "inputChannel": list,
-        "outputChannel": list,
-        "cameraAOI": dict,
-        "referenceLine": dict,
-        "r1_rule": dict,
-        "r2_rule": dict,
-        "cameras": list,
-        "pipelines": dict,
-    }
 
     @staticmethod
     def _set_channel(items, name, channel):
@@ -232,26 +205,19 @@ class Config:
         ):
             if data.get(legacy_key) is not None:
                 self._set_channel(self.outputChannel, channel_name, int(data[legacy_key]))
+                
         for name in self._STR_FIELDS:
             if data.get(name) is not None:
                 setattr(self, name, str(data[name]))
+                
         if data.get("api_port") is not None:
             self.api_port = int(data["api_port"])
         if data.get("stream_port") is not None:
             self.stream_port = int(data["stream_port"])
 
-        # 2. ปรับการอัปเดต referenceLine ให้ merge รายกล้อง ไม่ทับกล้องอื่น
-        if "referenceLine" in data and isinstance(data["referenceLine"], dict):
-            if not isinstance(self.referenceLine, dict):
-                self.referenceLine = {}
-            for cam_key, line_val in data["referenceLine"].items():
-                self.referenceLine[cam_key] = line_val
-
-        for name, kind in self._STRUCT_FIELDS.items():
-            if name == "referenceLine":
-                continue  # ข้ามเพราะจัดการแบบ merge ด้านบนแล้ว
-            if isinstance(data.get(name), kind):
+        for name, expected_type in self._STRUCT_FIELDS.items():
+            if name in data and isinstance(data[name], expected_type):
                 setattr(self, name, data[name])
-                
+
         self.save()
         return True

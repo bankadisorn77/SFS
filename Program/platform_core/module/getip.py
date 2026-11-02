@@ -89,4 +89,4 @@ class GetIPAddress:
 if __name__ == '__main__':
     detector = GetIPAddress()
     ip, mac, iface = detector.loopCheck()
-    logger.info("Connected on [%s] -> IP: %s | MAC: %s", iface, ip, mac)
+    print("Connected on [%s] -> IP: %s | MAC: %s", iface, ip, mac)

@@ -376,6 +376,7 @@ class Agent:
         }
         path = self.config.stream_control_path
         tmp = f"{path}.{os.getpid()}.tmp"
+        # print(payload,path,tmp)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
         os.replace(tmp, path)
