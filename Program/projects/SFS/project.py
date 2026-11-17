@@ -32,7 +32,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.logic = Logic(min_confidence=self.config.confident)
         self.device_id = self.config.device_id
         self.cameras = self.config.cameras
-        self.detector = Detector(modelPath="projects/SFS/model/best.pt")
+        self.detector = Detector(modelPath="Program/projects/SFS/model/best.pt")
         self.round_index = 0
         self.io = None
         self.R1_passed = False
@@ -92,22 +92,42 @@ class SfsPokaYokeProject(ProjectAdapter):
         for camera_id in self._inspection_camera_ids():
             frame = context.frames.get(camera_id)
             if frame is None:
-                logger.warning(f"[{camera_id}] No frame available for measurement.")
+                logger.warning("[%s] No frame available for measurement.", camera_id)
                 continue
-            # test
-            import cv2
-            # frame = cv2.imread('image.png')
-            info = self.detector.detection(frame, roi=self.config.ROI)
-            context.detections[camera_id] = info
-            if save_result_image:  
-                save_result_image(frame, camera_id, self.round_index + 1, info,min_confidence=self.config.confident)
+            context.detections[camera_id] = self.detector.detection(
+                frame, roi=self.config.ROI,
+            )
 
     def handle_validate(self, context: InspectionContext, step: Dict[str, Any]):
         for camera_id in self._inspection_camera_ids():
-            detections = context.detections.get(camera_id, [])
-            # logger.info(f"[{camera_id}] Detections: {detections}")
-            valid, info = self.logic.evaluate(detections, self.round_index)
-            context.results[camera_id] = bool(valid)
+            info = context.detections.get(camera_id)
+            valid, reason = self.logic.evaluate(info, self.round_index)
+            passed = bool(valid)
+            context.results[camera_id] = passed
+            if passed:
+                verdict = "EMPTY" if reason == "PASS (EMPTY)" else "OK"
+            else:
+                verdict = "NG" if reason in ("FAIL", "LOW CONFIDENCE") else "ERROR"
+            context.metadata.setdefault("camera_decisions", {})[camera_id] = {
+                "passed": passed, "reason": reason, "verdict": verdict,
+                "threshold": self.logic.min_confidence,
+            }
+            logger.info(
+                "[%s] Round %s: %s | %s",
+                camera_id, self.round_index + 1, verdict, reason,
+            )
+            frame = context.frames.get(camera_id)
+            if save_result_image is not None and frame is not None:
+                path = save_result_image(
+                    frame, camera_id, self.round_index + 1, info,
+                    verdict=verdict, reason=reason,
+                    min_confidence=self.logic.min_confidence,
+                )
+                context.metadata.setdefault("result_images", {})[camera_id] = (
+                    str(path) if path is not None else None
+                )
+                if path is None:
+                    logger.warning("[%s] Result image was not saved.", camera_id)
 
     def handle_decision(self, context: InspectionContext, step: Dict[str, Any]) -> bool:
         inspection_ids = self._inspection_camera_ids()
