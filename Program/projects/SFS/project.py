@@ -7,6 +7,7 @@ from pathlib import Path
 from platform_core.project import ProjectAdapter
 from platform_core.context import InspectionContext
 from platform_core.module.stream import StreamServer
+from platform_core.module.result_uploader import ResultUploader
 import logging
 from .detector import Detector
 from .io import IO
@@ -43,7 +44,9 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.streaming = False
         self._stream_cam = None
         self._stream_mtime = None
+        self._stream_started = None
         self.stream = None
+        self.uploader = ResultUploader(self.config)
         self._last_status = {
             "round_1_input": False,
             "round_2_input": False,
@@ -120,6 +123,7 @@ class SfsPokaYokeProject(ProjectAdapter):
                 camera_id, self.round_index + 1, verdict, reason,
             )
             frame = context.frames.get(camera_id)
+            path = None
             if save_result_image is not None and frame is not None:
                 path = save_result_image(
                     frame, camera_id, self.round_index + 1, info,
@@ -131,6 +135,29 @@ class SfsPokaYokeProject(ProjectAdapter):
                 )
                 if path is None:
                     logger.warning("[%s] Result image was not saved.", camera_id)
+            # Non-blocking: only queues a small dict; encode/HTTP run in the uploader thread.
+            self.uploader.submit(self._result_record(context, camera_id, info, verdict, reason), path)
+
+    def _result_record(self, context, camera_id, info, verdict, reason) -> Dict[str, Any]:
+        det = info[0] if isinstance(info, (tuple, list)) and info else info
+        det = det if isinstance(det, dict) else {}
+        return {
+            "camera_id": camera_id,
+            "cycle_id": context.cycle_id,
+            "pipeline_id": context.pipeline_id,
+            "result": verdict,
+            "detected_objects": {
+                "class_name": det.get("class_name"),
+                "confidence": det.get("confidence"),
+                "all_probs": det.get("all_probs"),
+            },
+            "meta": {
+                "round": self.round_index + 1,
+                "reason": reason,
+                "threshold": self.logic.min_confidence,
+                "started_at": context.started_at,
+            },
+        }
 
     def handle_decision(self, context: InspectionContext, step: Dict[str, Any]) -> bool:
         inspection_ids = self._inspection_camera_ids()
@@ -154,6 +181,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._remove_stream_control()
         self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)
         self.stream.start()
+        self.uploader.start()
 
         for _ in range(100):
             if isinstance(runtime.health_monitor.status["details"].get("camera"), dict):
@@ -312,7 +340,19 @@ class SfsPokaYokeProject(ProjectAdapter):
                 logger.warning(f"Stream on {self._stream_cam} stopped unexpectedly.")
                 self.streaming = False
                 self._stream_cam = None
+                self._stream_started = None
                 self._update_stream_status()
+            elif self._live_expired():
+                # Safety: never stay in live mode (= no inspection) if the web forgets to stop it.
+                logger.warning("Live on %s exceeded %ss. Turning live OFF.",
+                               self._stream_cam, self.config.live_timeout_s)
+                manager.stop_alignment_live(self._stream_cam)
+                self.streaming = False
+                self._stream_cam = None
+                self._stream_started = None
+                self._remove_stream_control()
+                self._update_stream_status()
+                return
         path = self.config.stream_control_path
         try:
             mtime = os.stat(path).st_mtime
@@ -342,6 +382,7 @@ class SfsPokaYokeProject(ProjectAdapter):
             manager.stop_alignment_live(self._stream_cam)
             self.streaming = False
             self._stream_cam = None
+            self._stream_started = None
             logger.info("Stream mode OFF.")
         if enabled and not self.streaming:
             if camera_id is None or manager.get(camera_id) is None:
@@ -349,10 +390,16 @@ class SfsPokaYokeProject(ProjectAdapter):
             elif manager.start_alignment_live(camera_id):
                 self.streaming = True
                 self._stream_cam = camera_id
+                self._stream_started = time.monotonic()
                 logger.info(f"Stream mode ON ({camera_id}).")
             else:
                 logger.warning(f"Failed to start live stream on {camera_id}.")
         self._update_stream_status()
+
+    def _live_expired(self) -> bool:
+        limit = int(getattr(self.config, "live_timeout_s", 600) or 0)
+        return bool(limit > 0 and self._stream_started is not None
+                    and time.monotonic() - self._stream_started >= limit)
 
     def _run_inspection_cycle(self, runtime, round_index: int = 0):
         self._cycle_alarm = False
@@ -388,6 +435,7 @@ class SfsPokaYokeProject(ProjectAdapter):
     def shutdown(self, runtime):
         if self.stream:
             self.stream.stop()
+        self.uploader.stop()
         self._remove_stream_control()
         self.streaming = False
         self._stream_cam = None

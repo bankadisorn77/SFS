@@ -23,6 +23,7 @@ from Program.platform_core.module.MQTTControl import MQTT
 from Program.platform_core.module.serverAPI import API_CALL
 from platform_core.module.shm import resiver
 from projects.SFS.config import Config
+from projects.SFS.manifest import build_manifest
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +51,8 @@ class Agent:
 
         self.config = Config()
         self._refresh_network()
-        self.api = API_CALL(config=self.config)
+        self.api = API_CALL(config=self.config, manifest_builder=build_manifest)
+        self._register_lock = threading.Lock()
 
         self.pipe = resiver(on_data_received=self.handle_incoming_pipe_data)
 
@@ -122,6 +124,15 @@ class Agent:
             logger.info("Start up complete.")
 
     def _register_loop(self):
+        # One loop at a time (startup + re-register after settings change).
+        if not self._register_lock.acquire(blocking=False):
+            return
+        try:
+            self._register_until_ok()
+        finally:
+            self._register_lock.release()
+
+    def _register_until_ok(self):
         while True:
             try:
                 ok = asyncio.run(self.api.register())
@@ -286,6 +297,7 @@ class Agent:
                     stream=self.stream_control,
                     camera_ids=[c["id"] for c in self.config.inspection_cameras],
                     api_key=self.api_key,
+                    prefix=self.config.mqtt_prefix,
                 )
                 self._setup_mqtt()
                 self.MQ.setMQTTServer(self.device_id, self.MQTTServer)
@@ -441,6 +453,16 @@ class Agent:
         self._reset_crash_state()
         self.start_worker()
         logger.info("Worker process restarted.")
+        # Device name / broker may have changed: follow it on MQTT, then send the
+        # refreshed manifest (current setting values) to the web.
+        self.device_id = self.config.device_id
+        self.MQTTServer = self.config.MQTTServer
+        self.api_key = self.config.api_key
+        if self.MQ:
+            self.MQ.camera_ids = [c["id"] for c in self.config.inspection_cameras]
+            self.MQ.api_key = self.api_key
+            self.MQ.setMQTTServer(self.device_id, self.MQTTServer)
+        threading.Thread(target=self._register_loop, daemon=True).start()
 
     def stream_control(self, data):
         if isinstance(data, str):
