@@ -1,8 +1,8 @@
 {
   "project_id": "SFS",
-  "device_id": "UTL-Ai-SFS(Dev)",
-  "ip": "172.19.51.54",
-  "mac": "48:21:0B:3D:2D:7B",
+  "device_id": "UTL-Ai-SFS(Dev2)",
+  "ip": "",
+  "mac": "",
   "api_port": 8080,
   "stream_port": 8081,
   "api_key": "",
@@ -80,13 +80,6 @@
       "id": "cam_2",
       "driver": "ueye",
       "hardware_index": 2,
-      "enabled": true,
-      "pipeline": "SFS"
-    },
-    {
-      "id": "cam_3",
-      "driver": "ueye",
-      "hardware_index": 3,
       "enabled": true,
       "pipeline": "SFS"
     }

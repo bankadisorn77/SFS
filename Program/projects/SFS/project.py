@@ -2,7 +2,7 @@ import json
 import os
 import time
 from typing import Dict, Any, Callable, List
-
+from pathlib import Path
 
 from platform_core.project import ProjectAdapter
 from platform_core.context import InspectionContext
@@ -32,7 +32,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.logic = Logic(min_confidence=self.config.confident)
         self.device_id = self.config.device_id
         self.cameras = self.config.cameras
-        self.detector = Detector(modelPath="Program/projects/SFS/model/best.pt")
+        self.detector = Detector(modelPath=str(Path(__file__).resolve().parent / "model" / "best.pt"))
         self.round_index = 0
         self.io = None
         self.R1_passed = False
@@ -94,9 +94,12 @@ class SfsPokaYokeProject(ProjectAdapter):
             if frame is None:
                 logger.warning("[%s] No frame available for measurement.", camera_id)
                 continue
-            context.detections[camera_id] = self.detector.detection(
-                frame, roi=self.config.ROI,
-            )
+            try:
+                context.detections[camera_id] = self.detector.detection(frame, roi=self.config.ROI)
+            except Exception:
+                logger.exception("[%s] Inference failed -> NG", camera_id)
+                context.detections[camera_id] = None  
+
 
     def handle_validate(self, context: InspectionContext, step: Dict[str, Any]):
         for camera_id in self._inspection_camera_ids():
@@ -321,8 +324,8 @@ class SfsPokaYokeProject(ProjectAdapter):
             if camera_id is None or manager.get(camera_id) is None:
                 logger.warning(f"Stream requested for unknown camera: {camera_id}")
             elif manager.start_alignment_live(camera_id):
-                #self.streaming = True
-                self.streaming = False
+                self.streaming = True
+                # self.streaming = False
 
                 self._stream_cam = camera_id
                 logger.info(f"Stream mode ON ({camera_id}).")
