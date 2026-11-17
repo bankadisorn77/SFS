@@ -28,8 +28,17 @@ class Config:
 
         self.MQTTServer = "localhost"
         self.server_url = "localhost"
+        # MQTT topic prefix: must match the web server project profile.
+        self.mqtt_prefix = "SFS_YOKA_POKE"
         self.save_image_path = str(self.root / "saved_images_output")
         self.stop_flag_path = str(self.root.parent / "stop_worker.flag")
+
+        # Live stream safety: edge turns live off by itself after this many seconds.
+        self.live_timeout_s = 600
+        # Send every inspection result (+ resized image) to the web server.
+        self.upload_results = True
+        self.upload_image_width = 1280
+        self.upload_jpeg_quality = 80
 
         # พารามิเตอร์สำหรับ AI Model และ ROI
         self.confident = 0.85
@@ -114,6 +123,8 @@ class Config:
                 return int(item.get("channel", default))
         return default
 
+    _INT_FIELDS = ("api_port", "stream_port", "live_timeout_s", "upload_image_width", "upload_jpeg_quality")
+
     def load(self):
         if not self.path.exists():
             self.save()
@@ -132,15 +143,17 @@ class Config:
                 "api_key",
                 "project_id",
                 "stop_flag_path",
+                "mqtt_prefix",
             ):
                 if name in data:
                     setattr(self, name, str(data[name]))
 
-            if "api_port" in data:
-                self.api_port = int(data["api_port"])
+            for name in self._INT_FIELDS:
+                if name in data:
+                    setattr(self, name, int(data[name]))
 
-            if "stream_port" in data:
-                self.stream_port = int(data["stream_port"])
+            if "upload_results" in data:
+                self.upload_results = bool(data["upload_results"])
 
             if "confident" in data:
                 self.confident = float(data["confident"])
@@ -178,8 +191,13 @@ class Config:
             "api_key": self.api_key,
             "MQTTServer": self.MQTTServer,
             "server_url": self.server_url,
+            "mqtt_prefix": self.mqtt_prefix,
             "save_image_path": self.save_image_path,
             "stop_flag_path": self.stop_flag_path,
+            "live_timeout_s": self.live_timeout_s,
+            "upload_results": self.upload_results,
+            "upload_image_width": self.upload_image_width,
+            "upload_jpeg_quality": self.upload_jpeg_quality,
             "confident": self.confident,
             "ROI": self.ROI,
             "inputChannel": self.inputChannel,
@@ -208,6 +226,7 @@ class Config:
         "save_image_path",
         "api_key",
         "project_id",
+        "mqtt_prefix",
     )
     _STRUCT_FIELDS = {
         "ROI": list,
@@ -247,10 +266,11 @@ class Config:
         for name in self._STR_FIELDS:
             if data.get(name) is not None:
                 setattr(self, name, str(data[name]))
-        if data.get("api_port") is not None:
-            self.api_port = int(data["api_port"])
-        if data.get("stream_port") is not None:
-            self.stream_port = int(data["stream_port"])
+        for name in self._INT_FIELDS:
+            if data.get(name) is not None:
+                setattr(self, name, int(data[name]))
+        if data.get("upload_results") is not None:
+            self.upload_results = bool(data["upload_results"])
         if data.get("confident") is not None:
             self.confident = float(data["confident"])
 
@@ -265,6 +285,9 @@ class Config:
                 continue
             if isinstance(data.get(name), kind):
                 setattr(self, name, data[name])
+
+        if isinstance(data.get("ROI"), list):
+            self.ROI = [float(x) for x in data["ROI"]]
 
         self.save()
         return True
