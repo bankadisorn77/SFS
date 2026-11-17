@@ -37,7 +37,9 @@ def save_result_image(
             raise ValueError("Multiple detections are not supported")
         det = det if isinstance(det, dict) else {}
         class_name = det.get("class_name", "UNKNOWN")
-        confidence = det.get("confidence", "N/A")
+        confidence = det.get("confidence")
+        confidence = f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "N/A"
+
         color = COLORS[verdict]
         now = datetime.now()
         lines = [

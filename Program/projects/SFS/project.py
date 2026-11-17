@@ -8,7 +8,6 @@ from platform_core.project import ProjectAdapter
 from platform_core.context import InspectionContext
 from platform_core.module.stream import StreamServer
 import logging
-import asyncio
 from .detector import Detector
 from .io import IO
 from .config import Config
@@ -16,7 +15,7 @@ from .logic import Logic
 
 logger = logging.getLogger("SfsPokaYokeProject")
 try:
-    from .img_logger import save_result_image   # DEMO
+    from .img_logger import save_result_image  
     logger.info('save DEMO')
 except ImportError:
     save_result_image = None
@@ -168,9 +167,6 @@ class SfsPokaYokeProject(ProjectAdapter):
 
             r1 = self.io.read_round_1()
             r2 = self.io.read_round_2()
-
-            if r1 or r2:
-                time.sleep(1)
 
             self._poll_stream(runtime)
             ready = runtime.hardware_ready()
