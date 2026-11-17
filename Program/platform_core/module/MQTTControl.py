@@ -22,8 +22,10 @@ class MQTT:
       deletedevic=None,
       stream=None,
       camera_ids=None,
+      prefix="SFS_YOKA_POKE",
   ):
-    self.prefix = "SFS_YOKA_POKE"
+    # Topic prefix comes from config.json (mqtt_prefix); must match the web project profile.
+    self.prefix = prefix or "SFS_YOKA_POKE"
     self.camera_ids = list(camera_ids or [])
     self.MQTTserver = broker_url
     self.machineID = device_id
