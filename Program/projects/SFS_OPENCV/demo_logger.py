@@ -1,15 +1,3 @@
-"""DEMO ONLY - save an annotated picture of every detection.
-
-HOW TO REMOVE: delete this file (project.py tolerates it being missing),
-or set ENABLED = False to switch it off without deleting.
-
-Saved image = the frame that went to the detector, plus
-  cyan outline  : where the slot should be (from the ALIGN reference)
-  grey box      : search window around it
-  red fill      : bright-blue (= open) area that was found inside the window
-  label         : slot name + how much of it is open
-  top banner    : cam / round / OK or NG / worst open vs limit / time
-"""
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -27,13 +15,11 @@ GREEN, RED, CYAN, GREY, WHITE = (0, 200, 0), (0, 0, 255), (255, 255, 0), (170, 1
 
 def save_result_image(frame, cam, round_, info, rule=None, detector=None,
                       out_dir=DEFAULT_DIR, save_raw=False):
-    """Never raises: a logging problem must not stop the inspection.
-    Returns the saved path (or None)."""
     if not ENABLED:
         return None
     try:
         return _save(frame, cam, round_, info or {}, rule or {}, detector, out_dir, save_raw)
-    except Exception as exc:                      # noqa: BLE001 - demo helper, stay silent
+    except Exception as exc:
         logger.warning("[DEMO] could not save result image: %s", exc)
         return None
 
@@ -46,11 +32,13 @@ def _save(frame, cam, round_, info, rule, detector, out_dir, save_raw):
     worst = max(ratios.values(), default=0.0)
     if info.get("status") != "OK":
         verdict, detail = "ERROR", str(info.get("status"))
+    elif info.get("empty"):
+        verdict, detail = "EMPTY", f"no workpiece, change {float(info.get('change', 0)):.2f}"
     elif worst > limit:
         verdict, detail = "NG", f"open {worst:.2f} > limit {limit:.2f}"
     else:
         verdict, detail = "OK", f"open {worst:.2f} <= limit {limit:.2f}"
-    color = GREEN if verdict == "OK" else RED
+    color = GREEN if verdict == "OK" else (GREY if verdict == "EMPTY" else RED)
 
     vis = frame.copy()
     dbg = getattr(detector, "last_debug", None) or {}
@@ -69,8 +57,8 @@ def _save(frame, cam, round_, info, rule, detector, out_dir, save_raw):
         vis = cv.addWeighted(overlay, 0.45, vis, 0.55, 0)
 
     now = datetime.now()
-    rname = "back" if str(round_) in ("1", "back") else "front"
-    lines = [f"{cam} | R{round_} ({rname})", f"RESULT: {verdict}  ({detail})",
+    rname = "back" if str(round_) in ("1", "back") else "front" if str(round_) in ("2", "front") else "refs"
+    lines = [f"{cam} | {rname}", f"RESULT: {verdict}  ({detail})",
              now.strftime("%Y-%m-%d %H:%M:%S")]
     cv.rectangle(vis, (8, 8), (640, 112), (20, 20, 20), cv.FILLED)
     cv.rectangle(vis, (8, 8), (640, 112), color, 3)

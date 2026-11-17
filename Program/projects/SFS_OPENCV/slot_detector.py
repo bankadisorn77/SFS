@@ -1,19 +1,8 @@
-"""Part 2 - DETECT: is the workpiece still held by the clamp?
-
-check(image, cam, round) -> {"status", "verdict", "ratios", ...}
-  round 1 (or "back")  -> watch the BOTTOM pair (back clamp)
-  round 2 (or "front") -> watch the TOP pair    (front clamp)
-
-For each watched slot we look for a bright-blue island near where the empty
-reference had that slot (search window tolerates the clamp moving a little) and
-compare its area with the slot's fully-open area:
-    open_ratio = island_area / reference_area      (0 = fully covered, 1 = fully open)
-REJECT if ANY watched slot has open_ratio > max_open_ratio.
-"""
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
+import cv2 as cv
 import numpy as np
 
 try:                                    # inside the project package (projects/SFS/)
@@ -33,6 +22,9 @@ class DetectConfig:
     max_open_ratio: float = 0.25     # reject if any slot is open more than this
     # Minimum saturation counted as "open blue", per clamp row. The back clamp (round 1) is
     # lit so that covered slots show pale-navy patches (S 160-175) -> use a stricter value.
+    empty_below: float = 0.25        # round 1: lower zone changed < this vs the empty frame -> no workpiece -> skip
+    empty_below_front: float = 0.20  # round 2: band between the clamps changed < this -> no front workpiece -> skip
+    skip_empty_front: bool = False   # round-2 "empty" skip is OFF: the cue is not reliable yet (see notes)
     smin_bot: int = 175              # round 1 / back clamp / bottom pair
     smin_top: int = 160              # round 2 / front clamp / top pair
     search_x: int = 90               # px the clamp may move around the reference
@@ -49,6 +41,7 @@ class SlotDetector:
         self.align_cfg = align_config or AlignConfig(aspect_min=0.0, aspect_max=1e9, area_min=100)
         self._refs = {}
         self.last_debug = {}          # what the last check() looked at (used by demo_logger)
+        self._empty = {}              # cam -> whole empty frame, grey+blur (from ALIGN)
 
     def _ref(self, cam):
         """Cached, but re-read whenever the file changes (e.g. after an INIT cycle)."""
@@ -61,7 +54,23 @@ class SlotDetector:
         if cached is None or cached[0] != mtime:
             cached = (mtime, FrameINIT.load_reference(p))
             self._refs[cam] = cached
+            png = self.ref_dir / f"reference_{cam}_empty.png"
+            self._empty[cam] = cv.imread(str(png), 0) if png.exists() else None
         return cached[1]
+
+    def _workpiece_change(self, image, cam, ref, row):
+        """Fraction of a region that differs from the ALIGN empty frame.
+        round 1 (bot): lower-centre zone | round 2 (top): band between the clamps.
+        None = cannot tell (old reference, other resolution) -> caller assumes a workpiece IS there."""
+        base = self._empty.get(cam)
+        key = "zone" if row == "bot" else "band"
+        if not ref.get("empty_full") or base is None or key not in ref or base.shape[:2] != image.shape[:2]:
+            return None                  # reference made before this feature -> run ALIGN again
+        h, w = image.shape[:2]
+        x0, y0, x1, y1 = (int(ref[key][0] * w), int(ref[key][1] * h), int(ref[key][2] * w), int(ref[key][3] * h))
+        cur = cv.GaussianBlur(cv.cvtColor(image, cv.COLOR_BGR2GRAY), (9, 9), 0)
+        diff = np.abs(base[y0:y1, x0:x1].astype(np.int16) - cur[y0:y1, x0:x1].astype(np.int16))
+        return float((diff > 40).mean())
 
     def check(self, image: np.ndarray, cam: str, round_) -> dict:
         self.last_debug = {}
@@ -73,6 +82,12 @@ class SlotDetector:
         ref = self._ref(cam)
         if ref is None:
             return {"status": NO_REFERENCE, "cam": cam}
+
+        change = self._workpiece_change(image, cam, ref, row) if (row == "bot" or self.cfg.skip_empty_front) else None
+        limit = self.cfg.empty_below if row == "bot" else self.cfg.empty_below_front
+        if change is not None and change < limit:
+            return {"status": OK, "empty": True, "change": round(change, 3), "ratios": {},
+                    "verdict": "SKIP", "worst": 0.0, "cam": cam, "round": round_}
 
         smin = self.cfg.smin_bot if row == "bot" else self.cfg.smin_top
         lo = self.align_cfg.lower_blue
@@ -99,7 +114,31 @@ class SlotDetector:
 
 
 if __name__ == "__main__":
-    import sys, cv2 as cv
-    # python slot_detector.py cam_1 1 frame.jpg
+    # python slot_detector.py <cam> <round> <image> [ref_dir] [out_dir]
+    #   e.g. python slot_detector.py cam_1 1 frame.jpg refs demo_results
+    import sys
+    import cv2 as cv
+    try:
+        from . import demo_logger
+    except ImportError:                      # run as a plain script
+        import demo_logger
+
+    if len(sys.argv) < 4:
+        sys.exit("usage: python slot_detector.py <cam> <round> <image> [ref_dir] [out_dir]")
     cam, rnd, path = sys.argv[1], sys.argv[2], sys.argv[3]
-    print(SlotDetector().check(cv.imread(path), cam, rnd))
+    ref_dir = sys.argv[4] if len(sys.argv) > 4 else "refs"
+    out_dir = sys.argv[5] if len(sys.argv) > 5 else "demo_results"
+
+    img = cv.imread(path)
+    if img is None:
+        sys.exit(f"cannot read image: {path}")
+
+    detector = SlotDetector(ref_dir=ref_dir)
+    info = detector.check(img, cam, rnd)
+    print({k: v for k, v in info.items()})
+
+    saved = demo_logger.save_result_image(
+        frame=img, cam=cam, round_=rnd, info=info,
+        rule={"max_open_ratio": detector.cfg.max_open_ratio},
+        detector=detector, out_dir=out_dir, save_raw=False)
+    print("saved:", saved)

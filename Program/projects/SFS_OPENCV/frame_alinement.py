@@ -13,6 +13,7 @@ That is why saturation (S >= 160), not brightness, is the key threshold.
 Rows:  top  = FRONT clamp (nearer the camera)  -> round 2
        bot  = BACK  clamp (farther)            -> round 1
 """
+import itertools
 import json
 import logging
 from dataclasses import dataclass, replace
@@ -34,7 +35,7 @@ class AlignConfig:
     upper_blue: tuple = (135, 255, 255)
     blur_ksize: int = 5
     open_ksize: int = 5
-    area_min: float = 250                 # px, at 1920x1080
+    area_min: float = 500                 # px, at 1920x1080
     area_max: float = 14000
     aspect_min: float = 1.3               # width / height of the slot
     aspect_max: float = 4.5
@@ -45,6 +46,9 @@ class AlignConfig:
     zone_x: tuple = (0.26, 0.73)
     zone_y: tuple = (0.23, 0.58)
     row_split_gap: int = 100              # px between the two clamp rows
+    pair_max_dy: int = 40                 # the two slots of one clamp sit at the same height
+    pair_min_dx: int = 150                # ...and far enough apart
+    pair_max_area_ratio: float = 3.0      # a glare-split slot can look much smaller than its twin
 
 
 def find_islands(img: np.ndarray, cfg: AlignConfig) -> list:
@@ -99,10 +103,26 @@ class FrameINIT:
                 rows[-1].append(i)
             else:
                 rows.append([i])
-        if len(rows) != 2 or any(len(r) != 2 for r in rows):
-            logger.warning("%s: need 2 rows x 2 slots, got %s", cam_id, [len(r) for r in rows])
+        pairs = []                                          # best valid slot PAIR of each row
+        for r in rows:
+            best = None
+            for a, b in itertools.combinations(r, 2):
+                dy = abs(a["center"][1] - b["center"][1])
+                dx = abs(a["center"][0] - b["center"][0])
+                ratio = max(a["area"], b["area"]) / min(a["area"], b["area"])
+                if dy <= self.cfg.pair_max_dy and dx >= self.cfg.pair_min_dx \
+                        and ratio <= self.cfg.pair_max_area_ratio:
+                    if best is None or a["area"] + b["area"] > best[0]:
+                        best = (a["area"] + b["area"], [a, b], ratio)
+            if best:
+                if best[2] > 1.5:
+                    logger.warning("%s: slot areas differ x%.1f (glare / partly hidden?)", cam_id, best[2])
+                pairs.append(best[1])
+        if len(pairs) != 2:
+            logger.warning("%s: need 2 clamp rows with a slot pair each, got %d", cam_id, len(pairs))
             return {"status": REF_NOT_CLEAR,
                     "candidates": [(i["center"], int(i["area"])) for i in isl]}
+        rows = pairs
 
         slots = {}
         for name, row in zip(("top", "bot"), rows):
@@ -111,13 +131,25 @@ class FrameINIT:
                     "row": name, "center": list(i["center"]), "area": round(i["area"], 1),
                     "bbox": [int(v) for v in i["bbox"]],
                     "contour": i["contour"][:, 0, :].astype(int).tolist()}
-        ref = {"cam_id": cam_id, "image_size": [int(w), int(h)],
+        cx = float(np.mean([s["center"][0] for s in slots.values()])) / w
+        zone = [round(max(cx - 0.26, 0.0), 4), 0.52, round(min(cx + 0.26, 1.0), 4), 1.0]  # x0,y0,x1,y1 (fractions)
+        top_y = np.mean([s["center"][1] for k, s in slots.items() if k.startswith("top")])
+        bot_y = np.mean([s["center"][1] for k, s in slots.items() if k.startswith("bot")])
+        # band between the two clamps: the FRONT workpiece's frame intrudes here, the back one does not
+        band = [round(max(cx - 600 / w, 0.0), 4), round((top_y + 90) / h, 4),
+                round(min(cx + 600 / w, 1.0), 4), round((bot_y - 45) / h, 4)]
+        empty = cv.GaussianBlur(cv.cvtColor(image, cv.COLOR_BGR2GRAY), (9, 9), 0)   # whole empty frame
+        ref = {"cam_id": cam_id, "zone": zone, "band": band, "empty_full": True,
+               "_empty_gray": empty, "image_size": [int(w), int(h)],
                "created_at": datetime.now().isoformat(timespec="seconds"), "slots": slots}
         return {"status": OK, "reference": ref}
 
     def save_reference(self, ref: dict) -> Path:
         self.save_dir.mkdir(parents=True, exist_ok=True)
         p = self.save_dir / f"reference_{ref['cam_id']}.json"
+        empty = ref.pop("_empty_gray", None)            # empty lower zone -> png (for "no workpiece" check)
+        if empty is not None:
+            cv.imwrite(str(self.save_dir / f"reference_{ref['cam_id']}_empty.png"), empty)
         p.write_text(json.dumps(ref, indent=2), encoding="utf-8")
         return p
 

@@ -4,17 +4,13 @@ import numpy as np
 from pyueye import ueye
 
 # พิกัดและสัดส่วนคงที่อ้างอิงจาก Canva 960 x 540 px
-CANVA_W = 960.0
 CANVA_H = 540.0
 
-# อันที่ 1: กรอบสี่เหลี่ยม
-X1_RATIO = 299.0 / CANVA_W          # ~0.3115
-Y1_RATIO = 128.4 / CANVA_H          # ~0.2378
-W1_RATIO = 362.1 / CANVA_W          # ~0.3772
-H1_RATIO = 63.6 / CANVA_H           # ~0.1178
+# 1. เส้นแนวนอนอ้างอิงจาก Canva ที่ Y = 221.1 px
+Y_LINE_RATIO = 221.1 / CANVA_H       # ~0.4094
 
-# อันที่ 2: เส้นตรงแนวนอนพาดผ่านจอที่ Y = 221.1 px
-Y2_RATIO = 221.1 / CANVA_H          # ~0.4094
+# 2. เส้นแนวตั้งแบ่งครึ่งซ้าย-ขวาตรงกลาง (50%)
+X_CENTER_RATIO = 0.5
 
 WINDOW_NAME = "IDS uEye Alignment"
 
@@ -87,14 +83,9 @@ def main():
     width = rectAOI.s32Width.value
     height = rectAOI.s32Height.value
 
-    # คำนวณพิกัดกล่องที่ 1
-    bx1 = int(X1_RATIO * width)
-    by1 = int(Y1_RATIO * height)
-    bw1 = int(W1_RATIO * width)
-    bh1 = int(H1_RATIO * height)
-
-    # คำนวณพิกัดแกน Y ของเส้นตรงแนวนอนที่ 2
-    ly2 = int(Y2_RATIO * height)
+    # คำนวณตำแหน่งเส้น
+    ly = int(Y_LINE_RATIO * height)       # ระดับเส้นแนวนอน
+    lx = int(X_CENTER_RATIO * width)      # กึ่งกลางเส้นแนวตั้ง (แบ่งซ้าย-ขวา)
 
     # จัดสรร Image Buffer
     pcImageMemory = ueye.c_mem_p()
@@ -109,8 +100,8 @@ def main():
     cv2.resizeWindow(WINDOW_NAME, 960, 600)
 
     print(f"\n[SUCCESS] เริ่มการแสดงผลกล้อง ID: {target_cam_id}")
-    print(f"กล่อง 1: X={bx1}, Y={by1}, W={bw1}, H={bh1}")
-    print(f"เส้นแนวนอน 2: Y={ly2} (จาก X: 0 ถึง {width})")
+    print(f"เส้นแนวนอน: Y={ly}")
+    print(f"เส้นแนวตั้ง (แบ่งครึ่ง): X={lx}")
     print("- กด 'q' หรือ 'ESC' เพื่อปิดโปรแกรม")
 
     try:
@@ -118,11 +109,11 @@ def main():
             array = ueye.get_data(pcImageMemory, width, height, nBitsPerPixel.value, width * 3, copy=False)
             frame = np.reshape(array, (height, width, 3)).copy()
 
-            # วาดกรอบสี่เหลี่ยมอันที่ 1 (สีเขียว เส้นบางสุด)
-            cv2.rectangle(frame, (bx1, by1), (bx1 + bw1, by1 + bh1), (0, 255, 0), thickness=1)
+            # 1. วาดเส้นแนวนอน (ซ้ายสุดไปขวาสุด)
+            cv2.line(frame, (0, ly), (width, ly), (0, 255, 0), thickness=1)
 
-            # วาดเส้นตรงแนวนอนอันที่ 2 (สีเขียว เส้นบางสุด ลากซ้ายสุดไปขวาสุด)
-            cv2.line(frame, (0, ly2), (width, ly2), (0, 255, 0), thickness=1)
+            # 2. วาดเส้นแนวตั้งแบ่งครึ่งซ้าย-ขวา (บนสุดลงล่างสุด)
+            cv2.line(frame, (lx, 0), (lx, height), (0, 255, 0), thickness=1)
 
             cv2.imshow(WINDOW_NAME, frame)
 
