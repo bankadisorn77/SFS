@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import fcntl
 import json
 import logging
@@ -30,6 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AGENT")
 
+# Worker auto-restart policy: restart a crashed worker, but give up (ERROR)
+# after MAX_AUTO_RESTARTS restarts within RESTART_WINDOW_S.
+WATCHDOG_INTERVAL_S = 2.0
+MAX_AUTO_RESTARTS = 3
+RESTART_WINDOW_S = 600.0
+
 
 class Agent:
 
@@ -57,6 +64,10 @@ class Agent:
         self.worker_proc = None
         self._ctl_lock = threading.Lock()
         self._startup_lock = threading.Lock()
+        # Watchdog state: _expect_running is True only while the worker should be up.
+        self._expect_running = False
+        self._crash_locked = False
+        self._restart_times = collections.deque()
         self.last_log_pos = (
             os.path.getsize(self.WORKER_LOG) if os.path.exists(self.WORKER_LOG) else 0
         )
@@ -70,6 +81,7 @@ class Agent:
 
         threading.Thread(target=self._tail_log_worker, daemon=True).start()
         threading.Thread(target=self._republish_worker, daemon=True).start()
+        threading.Thread(target=self._watchdog_worker, daemon=True).start()
 
     @property
     def stop_flag(self):
@@ -92,6 +104,9 @@ class Agent:
             pid = self.get_worker_pid()
             if pid:
                 logger.info("Worker (main.py) is already running (PID: %s).", pid)
+                self._expect_running = True
+            elif self._crash_locked:
+                logger.warning("Worker is in crash-lock (ERROR); not starting automatically.")
             else:
                 logger.info("No worker running on startup. Starting worker now...")
                 self.start_worker()
@@ -122,7 +137,12 @@ class Agent:
 
     def _off_status(self, running=False):
         status = self.MQ.off_payload() if self.MQ else {}
-        status["program_status"] = "RUNNING" if running else "OFF"
+        if running:
+            status["program_status"] = "RUNNING"
+        elif self._crash_locked:
+            status["program_status"] = "ERROR"
+        else:
+            status["program_status"] = "OFF"
         status["last_update"] = time.time()
         return status
 
@@ -156,6 +176,63 @@ class Agent:
                 self.MQ.statusMsg(msg=status, api_key=self.api_key)
             except Exception:
                 logger.exception("Republish status failed")
+
+    # ==========================
+    # Worker watchdog
+    # ==========================
+    def _append_worker_log(self, message):
+        # Also goes to the web terminal through _tail_log_worker.
+        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [AGENT]: {message}\n"
+        try:
+            with open(self.WORKER_LOG, "a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError:
+            pass
+
+    def _reset_crash_state(self):
+        self._crash_locked = False
+        self._restart_times.clear()
+
+    def _watchdog_worker(self):
+        while True:
+            time.sleep(WATCHDOG_INTERVAL_S)
+            try:
+                self._watchdog_check()
+            except Exception:
+                logger.exception("Worker watchdog error")
+
+    def _watchdog_check(self):
+        if not self._expect_running or self._crash_locked:
+            return
+        if self._ctl_lock.locked():
+            return  # start/stop in progress
+        if self.get_worker_pid() is not None:
+            return
+
+        code = self.worker_proc.poll() if self.worker_proc is not None else None
+        now = time.monotonic()
+        while self._restart_times and now - self._restart_times[0] > RESTART_WINDOW_S:
+            self._restart_times.popleft()
+
+        if len(self._restart_times) >= MAX_AUTO_RESTARTS:
+            self._expect_running = False
+            self._crash_locked = True
+            msg = (f"Worker crashed (exit code {code}) {MAX_AUTO_RESTARTS + 1} times within "
+                   f"{int(RESTART_WINDOW_S // 60)} min. Auto-restart stopped -> ERROR.")
+            logger.error(msg)
+            self._append_worker_log(msg)
+            for line in self._log_tail(15):
+                logger.info("%s", line)
+            if self.MQ:
+                self.MQ.statusMsg(msg=self._off_status(running=False), api_key=self.api_key)
+            return
+
+        self._restart_times.append(now)
+        msg = (f"Worker died unexpectedly (exit code {code}). Auto-restart "
+               f"{len(self._restart_times)}/{MAX_AUTO_RESTARTS}...")
+        logger.warning(msg)
+        self._append_worker_log(msg)
+        self.start_worker()
 
     def _tail_log_worker(self):
         while True:
@@ -248,6 +325,7 @@ class Agent:
     def start_worker(self):
         with self._ctl_lock:
             if self.get_worker_pid():
+                self._expect_running = True
                 return False
             reset_script = os.path.join(ROOT_DIR, "reconnectusb.sh")
             if os.path.exists(reset_script):
@@ -276,6 +354,8 @@ class Agent:
             finally:
                 log.close()
 
+            # From here on the watchdog restarts the worker if it dies.
+            self._expect_running = True
             logger.info("Worker started (pid %s).", self.worker_proc.pid)
             for _ in range(30):
                 time.sleep(0.1)
@@ -297,7 +377,10 @@ class Agent:
             return []
 
     def stop_worker(self, timeout=10):
+        # Intentional stop: the watchdog must not restart the worker.
+        self._expect_running = False
         with self._ctl_lock:
+            self._expect_running = False
             pid = self.get_worker_pid()
             if not pid:
                 return
@@ -338,6 +421,7 @@ class Agent:
                 self.stop_worker()
             else:
                 logger.info("Worker is not running; starting.")
+                self._reset_crash_state()
                 self.start_worker()
         except Exception as e:
             logger.exception("Failed to toggle worker: %s", e)
@@ -354,6 +438,7 @@ class Agent:
         self.config.update(data)
         logger.info("New config updated: %s", data)
         self.stop_worker()
+        self._reset_crash_state()
         self.start_worker()
         logger.info("Worker process restarted.")
 
@@ -400,6 +485,7 @@ class Agent:
 
     def cleanup(self):
         logger.info("Cleaning up resources...")
+        self._expect_running = False
         try:
             self.pipe.close()
         except Exception:

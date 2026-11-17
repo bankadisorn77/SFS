@@ -5,17 +5,33 @@ from ultralytics import YOLO
 import numpy as np
 import cv2 as cv
 
+try:
+    from .logic import EXPECTED_CLASSES, normalize_class_name
+except ImportError:  # running this file directly
+    from logic import EXPECTED_CLASSES, normalize_class_name
+
 logger = logging.getLogger(__name__)
 
 class Detector:
     
     def __init__(self,modelPath=None,config=None):
         self.model = YOLO(modelPath)
+        self._verify_class_names()
         sz = self.model.overrides.get("imgsz", 224)
         if isinstance(sz, (list, tuple)):
             sz = sz[0]
         self.imgsz = int(sz)
         logger.info(f"Detector initialized with model: {modelPath}, image size: {self.imgsz}")
+
+    def _verify_class_names(self):
+        # Fail-safe: refuse to start if the model does not have exactly the 5 SFS classes.
+        names = getattr(self.model, "names", None) or {}
+        found = {normalize_class_name(n) for n in dict(names).values()}
+        if found != set(EXPECTED_CLASSES):
+            raise RuntimeError(
+                f"Model class names mismatch. expected={sorted(EXPECTED_CLASSES)} got={dict(names)}"
+            )
+        logger.info("Model classes verified: %s", dict(names))
 
 
     @staticmethod

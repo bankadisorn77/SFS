@@ -2,11 +2,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CLASS_NO_RING = 0
-CLASS_R1_GOOD = 1
-CLASS_R1_NG = 2
-CLASS_R2_GOOD = 3
-CLASS_R2_NG = 4
+# Decisions are made by class NAME, not by index, so a retrained model whose
+# class order changes cannot silently turn an NG into a GOOD.
+NO_RING = "NO_RING"
+R1_GOOD = "R1_GOOD"
+R1_NG = "R1_NG"
+R2_GOOD = "R2_GOOD"
+R2_NG = "R2_NG"
+
+EXPECTED_CLASSES = frozenset({NO_RING, R1_GOOD, R1_NG, R2_GOOD, R2_NG})
+
+
+def normalize_class_name(name) -> str:
+    return str(name).strip().upper() if name is not None else ""
 
 
 class Logic:
@@ -22,36 +30,39 @@ class Logic:
         if not isinstance(detection, dict):
             return False, "DETECTION ERROR"
 
-        class_id = detection.get("class_id")
-        confidence = float(detection.get("confidence", 0.0))
+        class_name = normalize_class_name(detection.get("class_name"))
+        try:
+            confidence = float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            return False, "DETECTION ERROR"
 
-        if class_id is None:
+        if class_name not in EXPECTED_CLASSES:
+            logger.warning("Unknown class_name=%r (class_id=%s)", detection.get("class_name"), detection.get("class_id"))
             return False, "DETECTION ERROR"
 
         if confidence < self.min_confidence:
-            logger.warning("Low confidence: %.2f < %.2f (class_id=%s)", confidence, self.min_confidence, class_id)
+            logger.warning("Low confidence: %.2f < %.2f (class=%s)", confidence, self.min_confidence, class_name)
             return False, "LOW CONFIDENCE"
 
-
         if round_index == 0:
-            if class_id == CLASS_NO_RING:
+            if class_name == NO_RING:
                 return True, "PASS (EMPTY)"
-            elif class_id == CLASS_R1_GOOD:
+            elif class_name == R1_GOOD:
                 return True, "PASS"
-            elif class_id == CLASS_R1_NG:
+            elif class_name == R1_NG:
                 return False, "FAIL"
             else:
                 return False, "DETECTION ERROR"
 
-
         elif round_index == 1:
-            if class_id == CLASS_NO_RING:
+            if class_name == NO_RING:
                 return True, "PASS (EMPTY)"
-            elif class_id == CLASS_R2_GOOD:
+            elif class_name == R2_GOOD:
                 return True, "PASS"
-            elif class_id == CLASS_R1_GOOD:
+            elif class_name == R1_GOOD:
+                # Lot-end: this slot has no R2 ring (e.g. 5 pcs -> R1 x3, R2 x2).
                 return True, "PASS (R1 ONLY)"
-            elif class_id in {CLASS_R2_NG, CLASS_R1_NG}:
+            elif class_name in {R2_NG, R1_NG}:
                 return False, "FAIL"
             else:
                 return False, "DETECTION ERROR"

@@ -91,26 +91,19 @@ class MQTT:
 
   def connectMqtt(self):
     try:
-      lwt_topic1 = f'{self.prefix}/{self.machineID}/status'
-      lwt_topic2 = f'{self.prefix}/{self.machineID}/heartbeat'
-      lwt_dict1 = self.off_payload()
-      lwt_dict1['api_key'] = self.api_key
-      lwt_dict1['last_update'] = datetime.datetime.now().timestamp()
-      lwt_payload1 = json.dumps(lwt_dict1)
-
-      lwt_dict2 =  {
+      # paho keeps only ONE Last Will per client. The web dashboard uses the
+      # heartbeat "INACTIVE" will to mark the device offline, so use that one.
+      lwt_topic = f'{self.prefix}/{self.machineID}/heartbeat'
+      lwt_dict =  {
             "IP": GetIPAddress().get_active_lan_info()[0],
             "name": self.machineID,
             "Running Status": 'INACTIVE',
             "last_update": datetime.datetime.now().strftime("%H:%M:%S"),
         }
-      lwt_payload2 = json.dumps(lwt_dict2)
+      lwt_payload = json.dumps(lwt_dict)
 
       self.mqtt_client.will_set(
-          topic=lwt_topic1, payload=lwt_payload1, qos=1, retain=False
-      )
-      self.mqtt_client.will_set(
-          topic=lwt_topic2, payload=lwt_payload2, qos=1, retain=False
+          topic=lwt_topic, payload=lwt_payload, qos=1, retain=False
       )
       port = 1883
       self.mqtt_client.connect_async(self.MQTTserver, port, keepalive=15)
@@ -203,7 +196,9 @@ class MQTT:
         return
     try:
         topic, _ = self.topic()
-        self.mqtt_client.publish(topic[i], msg, qos=0, retain=(i == 0))
+        # retain=False: a stale RUNNING status must never stay on the broker
+        # after the agent dies. The agent republishes status every 5 s anyway.
+        self.mqtt_client.publish(topic[i], msg, qos=0, retain=False)
     except Exception as e:
         logger.warning("MQTT publish error: %s", e)
 

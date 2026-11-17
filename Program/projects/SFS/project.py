@@ -39,6 +39,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._hw_synced = False
         self._hw_fault = False
         self._cycle_alarm = False
+        self._input_conflict = False
         self.streaming = False
         self._stream_cam = None
         self._stream_mtime = None
@@ -97,7 +98,7 @@ class SfsPokaYokeProject(ProjectAdapter):
                 context.detections[camera_id] = self.detector.detection(frame, roi=self.config.ROI)
             except Exception:
                 logger.exception("[%s] Inference failed -> NG", camera_id)
-                context.detections[camera_id] = None  
+                context.detections[camera_id] = None
 
 
     def handle_validate(self, context: InspectionContext, step: Dict[str, Any]):
@@ -145,9 +146,11 @@ class SfsPokaYokeProject(ProjectAdapter):
     def run(self, runtime):
         self.io = IO(runtime.io_manager, self.config)
         self.io.reset_outputs()
-        self.io.set_state_machine(True)
+        # Do not tell the PLC "ready" yet; _sync_hardware() turns state_machine on
+        # only after cameras and GPIO are confirmed healthy.
+        self.io.set_state_machine(False)
 
-        self._last_status["machine_status"] = True
+        self._last_status["machine_status"] = False
         self._remove_stream_control()
         self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)
         self.stream.start()
@@ -179,7 +182,11 @@ class SfsPokaYokeProject(ProjectAdapter):
             })
             runtime.update_status(**self._last_status)
 
-            if not last_r1 and r1 and not r2:
+            if r1 and r2:
+                if not self._input_conflict:
+                    self._on_input_conflict(runtime)
+
+            elif not last_r1 and r1 and not r2:
                 if self.streaming:
                     logger.warning("Round 1 input detected but stream mode is on. Rejecting.")
                     self._reject_not_ready(runtime, round_index=0, alarm=False)
@@ -205,11 +212,31 @@ class SfsPokaYokeProject(ProjectAdapter):
                     self._run_inspection_cycle(runtime, round_index=1)
 
             if not r1 and not r2:
+                if self._input_conflict:
+                    self._clear_input_conflict()
                 self._on_no_input()
 
             last_r1 = r1
             last_r2 = r2
             time.sleep(0.05)
+
+    def _on_input_conflict(self, runtime):
+        # round_1 and round_2 must never be high together: alarm, no inspection.
+        logger.error("Input conflict: round_1 and round_2 are both HIGH. Alarm, no inspection.")
+        self._input_conflict = True
+        self._cycle_alarm = True
+        self.io.set_alarm(True)
+        self.io.set_fb_fault(True)
+        self._last_status["alarm_status"] = True
+        self._sync_fb_status()
+        runtime.update_status(**self._last_status)
+
+    def _clear_input_conflict(self):
+        # Alarm stays latched (_cycle_alarm) until the next valid cycle, like an NG.
+        logger.info("Input conflict cleared (both inputs LOW).")
+        self._input_conflict = False
+        self.io.set_fb_fault(self._hw_fault)
+        self._sync_fb_status()
 
     def _sync_fb_status(self):
         for i, value in enumerate(self.io.fb_state()):
@@ -245,7 +272,7 @@ class SfsPokaYokeProject(ProjectAdapter):
             if not self._cycle_alarm:
                 ok = self.io.set_alarm(False) and ok
                 self._last_status["alarm_status"] = False
-            self.io.set_fb_fault(False) 
+            self.io.set_fb_fault(self._input_conflict)
             self._hw_fault = False
             self._sync_fb_status()
             
@@ -321,8 +348,6 @@ class SfsPokaYokeProject(ProjectAdapter):
                 logger.warning(f"Stream requested for unknown camera: {camera_id}")
             elif manager.start_alignment_live(camera_id):
                 self.streaming = True
-                # self.streaming = False
-
                 self._stream_cam = camera_id
                 logger.info(f"Stream mode ON ({camera_id}).")
             else:

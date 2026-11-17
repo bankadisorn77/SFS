@@ -8,7 +8,18 @@ import time
 
 SHM_NAME = "PROJECT_SHARED_STATUS_MEMORY"
 SHM_SIZE = 8192 
+SHM_CHECK_INTERVAL_S = 2.0
 logger = logging.getLogger(__name__)
+
+
+def _shm_inode(name):
+  """Inode of the named segment on Linux (/dev/shm), or None if unavailable."""
+  if os.name != "posix":
+    return None
+  try:
+    return os.stat(os.path.join("/dev/shm", name.lstrip("/"))).st_ino
+  except OSError:
+    return None
 
 
 class resiver:
@@ -18,12 +29,17 @@ class resiver:
     self.on_data_received = on_data_received
     self.shm = None
     self.last_seq = -1  
+    self._inode = None
+    self._last_check = 0.0
 
   def _attach_shm(self):
     if self.shm is not None:
       return True
     try:
       self.shm = shared_memory.SharedMemory(name=SHM_NAME)
+      self._inode = _shm_inode(SHM_NAME)
+      self._last_check = time.monotonic()
+      self.last_seq = -1
       if os.name == "posix":
         try:
           from multiprocessing import resource_tracker
@@ -35,6 +51,27 @@ class resiver:
       self.shm = None
       return False
 
+  def _detach_shm(self):
+    if self.shm is not None:
+      try:
+        self.shm.close()
+      except Exception:
+        pass
+    self.shm = None
+    self._inode = None
+
+  def _segment_replaced(self):
+    # If the segment was unlinked/re-created (e.g. by an older worker build),
+    # we would keep reading a dead copy forever. Re-attach when the inode changes.
+    now = time.monotonic()
+    if now - self._last_check < SHM_CHECK_INTERVAL_S:
+      return False
+    self._last_check = now
+    if self._inode is None:
+      return False
+    current = _shm_inode(SHM_NAME)
+    return current != self._inode
+
   async def run_pipe_resiver(self):
     logger.info("Monitoring shared memory segment: %s", SHM_NAME)
     self.running = True
@@ -43,6 +80,11 @@ class resiver:
       try:
         if not self._attach_shm():
           await asyncio.sleep(0.5)
+          continue
+
+        if self._segment_replaced():
+          logger.info("Shared memory segment was replaced; re-attaching.")
+          self._detach_shm()
           continue
 
         buf = self.shm.buf
@@ -67,7 +109,7 @@ class resiver:
         await asyncio.sleep(0.05)
 
       except (FileNotFoundError, OSError):
-        self.shm = None
+        self._detach_shm()
         await asyncio.sleep(0.5)
       except Exception as e:
         if self.running:
@@ -76,12 +118,7 @@ class resiver:
 
   def close(self):
     self.running = False
-    if self.shm:
-      try:
-        self.shm.close()
-      except Exception:
-        pass
-      self.shm = None
+    self._detach_shm()
     logger.info("Shared memory receiver closed.")
 
 
@@ -102,10 +139,24 @@ class sender:
       logger.info("Created shared memory segment: %s", SHM_NAME)
     except FileExistsError:
       self.shm = shared_memory.SharedMemory(name=SHM_NAME)
-      logger.info("Attached to existing shared memory segment: %s", SHM_NAME)
+      # Continue the sequence so the agent never mistakes a new event for an old one.
+      try:
+        self.seq, _ = struct.unpack_from("<II", self.shm.buf, 0)
+      except Exception:
+        self.seq = 0
+      logger.info("Attached to existing shared memory segment: %s (seq=%s)", SHM_NAME, self.seq)
     except Exception as e:
       logger.exception("Failed to initialize shared memory sender: %s", e)
       self.shm = None
+      return
+    # The segment is shared with agent.py and must outlive this worker process:
+    # stop Python's resource_tracker from unlinking it when the worker exits.
+    if os.name == "posix":
+      try:
+        from multiprocessing import resource_tracker
+        resource_tracker.unregister(self.shm._name, "shared_memory")
+      except Exception:
+        pass
 
   def connect(self):
     if self.shm is None:
@@ -137,10 +188,10 @@ class sender:
       return False
 
   def close(self):
+    # Do NOT unlink: agent.py stays attached to this segment across worker restarts.
     if self.shm:
       try:
         self.shm.close()
-        self.shm.unlink()  # 
       except Exception:
         pass
       self.shm = None
