@@ -1,0 +1,162 @@
+{
+  "project_id": "SFS",
+  "device_id": "UTL-Ai-SFS(CHANGE-ME)",
+  "ip": "",
+  "mac": "",
+  "api_port": 8080,
+  "stream_port": 8081,
+  "api_key": "",
+  "MQTTServer": "10.151.27.1",
+  "server_url": "169.254.26.65",
+  "mqtt_prefix": "SFS_YOKA_POKE",
+  "save_image_path": "saved_images_output",
+  "stop_flag_path": "stop_worker.flag",
+  "live_timeout_s": 600,
+  "alarm_hold_s": 5.0,
+  "upload_results": true,
+  "upload_image_width": 1280,
+  "upload_jpeg_quality": 80,
+  "confident": 0.85,
+  "ROI": [
+    0.25,
+    0.8,
+    0.2,
+    0.55
+  ],
+  "inputChannel": [
+    {
+      "name": "round_1",
+      "channel": 0
+    },
+    {
+      "name": "round_2",
+      "channel": 1
+    }
+  ],
+  "outputChannel": [
+    {
+      "name": "cam_1",
+      "channel": 3
+    },
+    {
+      "name": "cam_2",
+      "channel": 4
+    },
+    {
+      "name": "cam_3",
+      "channel": 5
+    },
+    {
+      "name": "round",
+      "channel": 2
+    },
+    {
+      "name": "alarm",
+      "channel": 6
+    },
+    {
+      "name": "state_machine",
+      "channel": 7
+    },
+    {
+      "name": "FB1",
+      "channel": 0
+    },
+    {
+      "name": "FB2",
+      "channel": 1
+    }
+  ],
+  "cameraAOI": {
+    "width": 1920,
+    "height": 1080
+  },
+  "referenceLine": {
+    "cam_1": {
+      "Angle": null,
+      "x1": null,
+      "y1": null,
+      "x2": null,
+      "y2": null
+    },
+    "cam_2": {
+      "Angle": null,
+      "x1": null,
+      "y1": null,
+      "x2": null,
+      "y2": null
+    },
+    "cam_3": {
+      "Angle": null,
+      "x1": null,
+      "y1": null,
+      "x2": null,
+      "y2": null
+    }
+  },
+  "r1_rule": {
+    "width": 1920,
+    "height": 1080,
+    "angle": 10
+  },
+  "r2_rule": {
+    "width": 1920,
+    "height": 1080,
+    "angle": 10
+  },
+  "cameras": [
+    {
+      "id": "cam_1",
+      "driver": "ueye",
+      "hardware_index": 1,
+      "enabled": true,
+      "pipeline": "SFS"
+    },
+    {
+      "id": "cam_2",
+      "driver": "ueye",
+      "hardware_index": 2,
+      "enabled": true,
+      "pipeline": "SFS"
+    },
+    {
+      "id": "cam_3",
+      "driver": "ueye",
+      "hardware_index": 3,
+      "enabled": true,
+      "pipeline": "SFS"
+    }
+  ],
+  "pipelines": {
+    "SFS": {
+      "mode": "shared",
+      "steps": [
+        {
+          "id": "capture",
+          "type": "capture"
+        },
+        {
+          "id": "measure",
+          "type": "measure"
+        },
+        {
+          "id": "validate",
+          "type": "validate"
+        },
+        {
+          "id": "decision",
+          "type": "decision"
+        }
+      ]
+    },
+    "stream_only": {
+      "mode": "shared",
+      "steps": [
+        {
+          "id": "stream",
+          "type": "stream_only"
+        }
+      ]
+    }
+  }
+}

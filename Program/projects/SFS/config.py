@@ -50,15 +50,16 @@ class Config:
             {"name": "round_1", "channel": 0},
             {"name": "round_2", "channel": 1},
         ]
+        # Default = real SFS USB-4761 wiring (same as config.example.json).
         self.outputChannel = [
-            {"name": "cam_1", "channel": 0},
-            {"name": "cam_2", "channel": 1},
-            {"name": "cam_3", "channel": 2},
-            {"name": "round", "channel": 3},
-            {"name": "alarm", "channel": 4},
-            {"name": "state_machine", "channel": 5},
-            {"name": "FB1", "channel": 6},
-            {"name": "FB2", "channel": 7},
+            {"name": "cam_1", "channel": 3},
+            {"name": "cam_2", "channel": 4},
+            {"name": "cam_3", "channel": 5},
+            {"name": "round", "channel": 2},
+            {"name": "alarm", "channel": 6},
+            {"name": "state_machine", "channel": 7},
+            {"name": "FB1", "channel": 0},
+            {"name": "FB2", "channel": 1},
         ]
         self.cameraAOI = {"width": 1920, "height": 1080}
 
@@ -113,27 +114,49 @@ class Config:
     def inspection_cameras(self) -> List[dict]:
         return [c for c in self.cameras if c.get("enabled", True)]
 
-    def get_input_channel(self, name: str, default: int = 0) -> int:
-        for item in self.inputChannel:
+    # A name that is not in config.json returns None (= not wired), never channel 0:
+    # channel 0 is round_1 (input) / FB1 (output) on the SFS machine.
+    @staticmethod
+    def _find_channel(items, name: str, default: Optional[int]) -> Optional[int]:
+        for item in items or []:
             if isinstance(item, dict) and item.get("name") == name:
-                return int(item.get("channel", default))
+                channel = item.get("channel")
+                return int(channel) if channel is not None else default
         return default
 
-    def get_output_channel(self, name: str, default: int = 0) -> int:
-        for item in self.outputChannel:
-            if isinstance(item, dict) and item.get("name") == name:
-                return int(item.get("channel", default))
-        return default
+    def get_input_channel(self, name: str, default: Optional[int] = None) -> Optional[int]:
+        return self._find_channel(self.inputChannel, name, default)
+
+    def get_output_channel(self, name: str, default: Optional[int] = None) -> Optional[int]:
+        return self._find_channel(self.outputChannel, name, default)
+
+    @property
+    def example_path(self) -> Path:
+        return self.path.with_name("config.example.json")
+
+    @property
+    def save_dir(self) -> str:
+        """save_image_path; a relative path is relative to the Program folder."""
+        path = Path(self.save_image_path)
+        return str(path if path.is_absolute() else self.root / path)
 
     _INT_FIELDS = ("api_port", "stream_port", "live_timeout_s", "upload_image_width", "upload_jpeg_quality")
 
     def load(self):
+        source = self.path
         if not self.path.exists():
-            self.save()
-            return
+            # New machine: start from the committed template, then write config.json.
+            if self.example_path.exists():
+                logger.warning("%s not found; creating it from %s.", self.path, self.example_path.name)
+                source = self.example_path
+            else:
+                self.save()
+                return
         try:
-            with self.path.open("r", encoding="utf-8") as f:
+            with source.open("r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("config root must be a JSON object")
 
             for name in (
                 "device_id",
@@ -181,9 +204,33 @@ class Config:
 
             if not os.path.isabs(self.stop_flag_path):
                 self.stop_flag_path = str(self.root.parent / self.stop_flag_path)
+            flag_moved = self._check_stop_flag_dir()
 
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            logger.warning("Failed to load config %s: %s", self.path, exc)
+            logger.warning("Failed to load config %s: %s", source, exc)
+            return
+
+        # Write back keys this code version uses but the file does not have yet
+        # (alarm_hold_s, mqtt_prefix, ...), so config.json always shows every setting.
+        missing = sorted(set(self.as_dict()) - set(data))
+        if source != self.path or missing or flag_moved:
+            if missing and source == self.path:
+                logger.info("Adding missing keys to %s: %s", self.path.name, ", ".join(missing))
+            try:
+                self.save()
+            except OSError as exc:
+                logger.warning("Cannot write %s: %s", self.path, exc)
+
+    def _check_stop_flag_dir(self) -> bool:
+        """stop_flag_path (and stream_control.json next to it) must be in an existing
+        folder. A path copied from another machine would silently break STOP and
+        live view, so fall back to the repo folder. Returns True if changed."""
+        if Path(self.stop_flag_path).parent.is_dir():
+            return False
+        fallback = str(self.root.parent / "stop_worker.flag")
+        logger.warning("stop_flag_path folder does not exist (%s); using %s.", self.stop_flag_path, fallback)
+        self.stop_flag_path = fallback
+        return True
 
     def as_dict(self) -> dict:
         return {

@@ -75,6 +75,34 @@ class GetIPAddress:
                     
         return "127.0.0.1", "00:00:00:00:00:00", None
 
+    def get_route_info(self, host: str, port: int = 80):
+        """IP/MAC/interface this machine uses to reach `host` (e.g. the web server).
+
+        With two LAN ports (factory network + direct cable to the web PC) the first
+        port found by get_active_lan_info() may not be reachable from the web, and
+        the live view (web -> edge:8081) would fail. A UDP connect() only asks the
+        kernel for the route; no packet is sent. Returns None if not resolvable.
+        """
+        host = (host or "").strip()
+        if not host:
+            return None
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect((host, int(port or 80)))
+                ip = sock.getsockname()[0]
+        except (OSError, ValueError):
+            return None
+        if not ip or ip.startswith("127.") or ip == "0.0.0.0":
+            return None
+        try:
+            names = [name for _, name in socket.if_nameindex()]
+        except OSError:
+            names = []
+        for iface in names:
+            if self.get_ip_address(iface) == ip:
+                return ip, self.get_mac_address(iface), iface
+        return ip, "00:00:00:00:00:00", None
+
     def loopCheck(self, retry_delay: float = 3.0):
         """วนลูปรอจนกว่าจะเสียบสายแลนและได้ IP เรียบร้อย"""
         ip, mac, iface = self.get_active_lan_info()
