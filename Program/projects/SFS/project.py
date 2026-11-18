@@ -41,6 +41,7 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._hw_fault = False
         self._cycle_alarm = False
         self._input_conflict = False
+        self._alarm_until = None
         self.streaming = False
         self._stream_cam = None
         self._stream_mtime = None
@@ -203,6 +204,7 @@ class SfsPokaYokeProject(ProjectAdapter):
             ready = runtime.hardware_ready()
             gpio_ok = bool(runtime.health_monitor.status["details"].get("gpio"))
             self._sync_hardware(ready, gpio_ok)
+            self._expire_alarm_hold()
 
             self._last_status.update({
                 "round_1_input": r1,
@@ -253,17 +255,47 @@ class SfsPokaYokeProject(ProjectAdapter):
         logger.error("Input conflict: round_1 and round_2 are both HIGH. Alarm, no inspection.")
         self._input_conflict = True
         self._cycle_alarm = True
+        self._alarm_until = None  # held for as long as the conflict lasts
         self.io.set_alarm(True)
-        self.io.set_fb_fault(True)
+        # FB1+FB2 FAIL (fb_fail, not fb_fault) so the 5 s hold releases them like an NG.
+        for round_idx in range(len(self.io.fb_state())):
+            self.io.set_fb_fail(round_idx, True)
         self._last_status["alarm_status"] = True
         self._sync_fb_status()
         runtime.update_status(**self._last_status)
 
     def _clear_input_conflict(self):
-        # Alarm stays latched (_cycle_alarm) until the next valid cycle, like an NG.
-        logger.info("Input conflict cleared (both inputs LOW).")
+        # Alarm + FB1/FB2 stay ON for alarm_hold_s after the conflict ends.
+        logger.info("Input conflict cleared (both inputs LOW). Holding alarm %.1fs.", self._alarm_hold_s())
         self._input_conflict = False
+        self._start_alarm_hold()
+
+    def _alarm_hold_s(self) -> float:
+        try:
+            return max(0.0, float(getattr(self.config, "alarm_hold_s", 5.0)))
+        except (TypeError, ValueError):
+            return 5.0
+
+    def _start_alarm_hold(self):
+        self._alarm_until = time.monotonic() + self._alarm_hold_s()
+
+    def _expire_alarm_hold(self):
+        """NG / input-conflict alarm + FB1/FB2 are held alarm_hold_s seconds, then released.
+
+        Hardware faults (_hw_fault) are not timed: they stay until hardware is ready again.
+        """
+        if not self._cycle_alarm or self._input_conflict or self._alarm_until is None:
+            return
+        if time.monotonic() < self._alarm_until:
+            return
+        logger.info("Alarm hold (%.1fs) elapsed. Releasing alarm and FB.", self._alarm_hold_s())
+        self._cycle_alarm = False
+        self._alarm_until = None
+        self.io.clear_fb_fail()
         self.io.set_fb_fault(self._hw_fault)
+        if not self._hw_fault:
+            self.io.set_alarm(False)
+            self._last_status["alarm_status"] = False
         self._sync_fb_status()
 
     def _sync_fb_status(self):
@@ -271,10 +303,13 @@ class SfsPokaYokeProject(ProjectAdapter):
             self._last_status[f"round_{i + 1}_output"] = value
 
     def _on_no_input(self):
+        if self._cycle_alarm:
+            return  # NG / conflict alarm + FB are held by _expire_alarm_hold()
         self.io.clear_fb_fail()
-        if not self._hw_fault and not self._cycle_alarm:
+        if not self._hw_fault:
             self.io.reset_state()
             self.io.set_alarm(False)
+            self._last_status["alarm_status"] = False
         self._sync_fb_status()
 
     def _sync_hardware(self, ready: bool, gpio_ok: bool):
@@ -300,7 +335,7 @@ class SfsPokaYokeProject(ProjectAdapter):
             if not self._cycle_alarm:
                 ok = self.io.set_alarm(False) and ok
                 self._last_status["alarm_status"] = False
-            self.io.set_fb_fault(self._input_conflict)
+            self.io.set_fb_fault(False)
             self._hw_fault = False
             self._sync_fb_status()
             
@@ -403,6 +438,7 @@ class SfsPokaYokeProject(ProjectAdapter):
 
     def _run_inspection_cycle(self, runtime, round_index: int = 0):
         self._cycle_alarm = False
+        self._alarm_until = None
         self.io.reset_state()
         self.io.set_alarm(False)
         self._sync_fb_status()
@@ -425,6 +461,7 @@ class SfsPokaYokeProject(ProjectAdapter):
             self.io.set_fb_fail(round_index, False)
         else:
             self._cycle_alarm = True
+            self._start_alarm_hold()  # alarm + FB released after alarm_hold_s
             self.io.set_alarm(True)
             self._last_status["alarm_status"] = True
             self.io.set_fb_fail(round_index, True)

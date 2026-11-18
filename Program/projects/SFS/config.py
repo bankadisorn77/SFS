@@ -35,6 +35,8 @@ class Config:
 
         # Live stream safety: edge turns live off by itself after this many seconds.
         self.live_timeout_s = 600
+        # NG / input-conflict: alarm + FB1/FB2 stay ON this many seconds, then release.
+        self.alarm_hold_s = 5.0
         # Send every inspection result (+ resized image) to the web server.
         self.upload_results = True
         self.upload_image_width = 1280
@@ -158,6 +160,9 @@ class Config:
             if "confident" in data:
                 self.confident = float(data["confident"])
 
+            if "alarm_hold_s" in data:
+                self.alarm_hold_s = float(data["alarm_hold_s"])
+
             if "ROI" in data and isinstance(data["ROI"], list):
                 self.ROI = [float(x) for x in data["ROI"]]
 
@@ -195,6 +200,7 @@ class Config:
             "save_image_path": self.save_image_path,
             "stop_flag_path": self.stop_flag_path,
             "live_timeout_s": self.live_timeout_s,
+            "alarm_hold_s": self.alarm_hold_s,
             "upload_results": self.upload_results,
             "upload_image_width": self.upload_image_width,
             "upload_jpeg_quality": self.upload_jpeg_quality,
@@ -273,6 +279,8 @@ class Config:
             self.upload_results = bool(data["upload_results"])
         if data.get("confident") is not None:
             self.confident = float(data["confident"])
+        if data.get("alarm_hold_s") is not None:
+            self.alarm_hold_s = float(data["alarm_hold_s"])
 
         if "referenceLine" in data and isinstance(data["referenceLine"], dict):
             if not isinstance(self.referenceLine, dict):
