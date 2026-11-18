@@ -92,7 +92,15 @@ class Agent:
     def _refresh_network(self):
         try:
             net = GetIPAddress()
-            ip, mac, _ = net.get_active_lan_info()
+            # Register the IP of the port that reaches the web server: the web opens
+            # the live stream back to this IP (edge:stream_port).
+            route = None
+            host = (self.config.server_url or "").strip()
+            if host and host.lower() != "localhost":
+                route = net.get_route_info(host, self.config.api_port)
+            ip, mac, iface = route or net.get_active_lan_info()
+            logger.info("Network: %s %s (%s)%s", ip, mac, iface,
+                        f" -> route to {host}" if route else "")
             if ip != "127.0.0.1" and (ip != self.config.ip or mac != self.config.mac):
                 self.config.update({"ip": ip, "mac": mac})
         except Exception as e:
@@ -399,8 +407,8 @@ class Agent:
             try:
                 with open(self.stop_flag, "w", encoding="utf-8") as f:
                     f.write("STOP")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Cannot write stop flag %s (%s); will use signals.", self.stop_flag, e)
             try:
                 proc = psutil.Process(pid)
             except psutil.NoSuchProcess:
@@ -483,10 +491,14 @@ class Agent:
         }
         path = self.config.stream_control_path
         tmp = f"{path}.{os.getpid()}.tmp"
-        # print(payload,path,tmp)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        os.replace(tmp, path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+        except OSError as e:
+            # Runs in the MQTT callback: never raise, but say clearly why live failed.
+            logger.error("Stream control not applied: cannot write %s (%s). Check stop_flag_path.", path, e)
+            return
         logger.info("Stream control: %s", payload)
 
     def delete_device(self, data):
