@@ -130,6 +130,17 @@ class Config:
     def get_output_channel(self, name: str, default: Optional[int] = None) -> Optional[int]:
         return self._find_channel(self.outputChannel, name, default)
 
+    def output_channels(self) -> List[int]:
+        """Every wired output channel; agent.py forces them OFF when the worker is not running."""
+        channels = []
+        for item in self.outputChannel or []:
+            if isinstance(item, dict) and item.get("channel") is not None:
+                try:
+                    channels.append(int(item["channel"]))
+                except (TypeError, ValueError):
+                    pass
+        return sorted(set(channels))
+
     @property
     def example_path(self) -> Path:
         return self.path.with_name("config.example.json")

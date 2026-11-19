@@ -189,66 +189,99 @@ class SfsPokaYokeProject(ProjectAdapter):
                 break
             time.sleep(0.1)
 
-        last_r1 = self.io.read_round_1()
-        last_r2 = self.io.read_round_2()
+        self._last_r1 = self.io.read_round_1()
+        self._last_r2 = self.io.read_round_2()
+        self._loop_errors = 0
 
         while True:
-            if self._stop_requested():
-                self.io.reset_outputs()
-                break
-
-            r1 = self.io.read_round_1()
-            r2 = self.io.read_round_2()
-
-            self._poll_stream(runtime)
-            ready = runtime.hardware_ready()
-            gpio_ok = bool(runtime.health_monitor.status["details"].get("gpio"))
-            self._sync_hardware(ready, gpio_ok)
-            self._expire_alarm_hold()
-
-            self._last_status.update({
-                "round_1_input": r1,
-                "round_2_input": r2
-            })
-            runtime.update_status(**self._last_status)
-
-            if r1 and r2:
-                if not self._input_conflict:
-                    self._on_input_conflict(runtime)
-
-            elif not last_r1 and r1 and not r2:
-                if self.streaming:
-                    logger.warning("Round 1 input detected but stream mode is on. Rejecting.")
-                    self._reject_not_ready(runtime, round_index=0, alarm=False)
-                elif ready:
-                    logger.info("Round 1 input detected. Starting inspection cycle.")
-                    self._run_inspection_cycle(runtime, round_index=0)
-                else:
-                    logger.warning("Round 1 input detected but hardware is not ready. Rejecting.")
-                    self._reject_not_ready(runtime, round_index=0)
-
-            elif not last_r2 and r2 and not r1:
-                if self.streaming:
-                    logger.warning("Round 2 input detected but stream mode is on. Rejecting.")
-                    self._reject_not_ready(runtime, round_index=1, alarm=False)
-                elif not ready:
-                    logger.warning("Round 2 input detected but hardware is not ready. Rejecting.")
-                    self._reject_not_ready(runtime, round_index=1)
-                elif self.R1_passed:
-                    logger.info("Round 2 input detected. Starting inspection cycle.")
-                    self._run_inspection_cycle(runtime, round_index=1)
-                else:
-                    logger.warning("Round 2 input detected but Round 1 has not passed.")
-                    self._run_inspection_cycle(runtime, round_index=1)
-
-            if not r1 and not r2:
-                if self._input_conflict:
-                    self._clear_input_conflict()
-                self._on_no_input()
-
-            last_r1 = r1
-            last_r2 = r2
+            try:
+                if self._loop_once(runtime):
+                    break
+                self._loop_errors = 0
+            except Exception:
+                # Never let one unexpected error kill the worker: a dead worker leaves
+                # the outputs as they are. Fail safe (NG + alarm) and keep running.
+                self._on_loop_error(runtime)
             time.sleep(0.05)
+
+    def _on_loop_error(self, runtime):
+        self._loop_errors += 1
+        if self._loop_errors == 1 or self._loop_errors % 50 == 0:
+            logger.exception("Unexpected error in inspection loop (#%d) -> NG + ALARM, continuing.",
+                             self._loop_errors)
+        try:
+            self.io.reset_state()  # PASS outputs (cam_x / round) OFF
+            self._cycle_alarm = True
+            self._start_alarm_hold()
+            self.io.set_alarm(True)
+            for round_idx in range(len(self.io.fb_state())):
+                self.io.set_fb_fail(round_idx, True)
+            self._last_status["alarm_status"] = True
+            self._sync_fb_status()
+            runtime.update_status(**self._last_status)
+        except Exception:
+            logger.debug("Fail-safe output write failed", exc_info=True)
+        time.sleep(0.5)
+
+    def _loop_once(self, runtime) -> bool:
+        """One pass of the inspection loop. Returns True when STOP was requested."""
+        last_r1, last_r2 = self._last_r1, self._last_r2
+        if self._stop_requested():
+            self.io.reset_outputs()
+            return True
+
+        r1 = self.io.read_round_1()
+        r2 = self.io.read_round_2()
+        # Remember the inputs now: if this pass fails, the same edge must not start
+        # another inspection on the next pass (the error already gave NG + alarm).
+        self._last_r1, self._last_r2 = r1, r2
+
+        self._poll_stream(runtime)
+        ready = runtime.hardware_ready()
+        gpio_ok = bool(runtime.health_monitor.status["details"].get("gpio"))
+        self._sync_hardware(ready, gpio_ok)
+        self._expire_alarm_hold()
+
+        self._last_status.update({
+            "round_1_input": r1,
+            "round_2_input": r2
+        })
+        runtime.update_status(**self._last_status)
+
+        if r1 and r2:
+            if not self._input_conflict:
+                self._on_input_conflict(runtime)
+
+        elif not last_r1 and r1 and not r2:
+            if self.streaming:
+                logger.warning("Round 1 input detected but stream mode is on. Rejecting.")
+                self._reject_not_ready(runtime, round_index=0, alarm=False)
+            elif ready:
+                logger.info("Round 1 input detected. Starting inspection cycle.")
+                self._run_inspection_cycle(runtime, round_index=0)
+            else:
+                logger.warning("Round 1 input detected but hardware is not ready. Rejecting.")
+                self._reject_not_ready(runtime, round_index=0)
+
+        elif not last_r2 and r2 and not r1:
+            if self.streaming:
+                logger.warning("Round 2 input detected but stream mode is on. Rejecting.")
+                self._reject_not_ready(runtime, round_index=1, alarm=False)
+            elif not ready:
+                logger.warning("Round 2 input detected but hardware is not ready. Rejecting.")
+                self._reject_not_ready(runtime, round_index=1)
+            elif self.R1_passed:
+                logger.info("Round 2 input detected. Starting inspection cycle.")
+                self._run_inspection_cycle(runtime, round_index=1)
+            else:
+                logger.warning("Round 2 input detected but Round 1 has not passed.")
+                self._run_inspection_cycle(runtime, round_index=1)
+
+        if not r1 and not r2:
+            if self._input_conflict:
+                self._clear_input_conflict()
+            self._on_no_input()
+        return False
 
     def _on_input_conflict(self, runtime):
         # round_1 and round_2 must never be high together: alarm, no inspection.

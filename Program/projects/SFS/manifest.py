@@ -51,6 +51,8 @@ def build_manifest(config) -> Dict[str, Any]:
             {"key": "stream_status", "label": "LIVE", "type": "bool", "group": "stream",
              "on": "ON", "off": "OFF", "on_color": "orange", "off_color": "grey"},
             {"key": "stream_camera", "label": "LIVE CAM", "type": "text", "group": "stream"},
+            {"key": "disk_used_pct", "label": "DISK", "type": "number", "group": "system",
+             "unit": "%", "decimals": 0, "color": "blue-grey", "warn_above": 85, "warn_color": "red"},
         ],
         "cameras": cameras,
         "stream": {
