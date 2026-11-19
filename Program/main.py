@@ -1,4 +1,9 @@
 import logging
+import os
+
+# Factory network has no internet: stop Ultralytics from trying GitHub/PyPI
+# checks at start-up (slow start / timeouts). Must be set before importing it.
+os.environ.setdefault("YOLO_OFFLINE", "True")
 
 from platform_core.runtime import PlatformRuntime
 from projects.SFS.project import SfsPokaYokeProject

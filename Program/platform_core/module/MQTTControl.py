@@ -1,10 +1,13 @@
 import datetime
 import json
 import logging
+import threading
+import uuid
+
 import paho.mqtt.client as mqtt
-from Program.platform_core.module.getip import GetIPAddress
-from Program.platform_core.module.repeatedTimer import RepeatedTimer
-import threading  
+
+from .getip import GetIPAddress
+from .repeatedTimer import RepeatedTimer
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +26,14 @@ class MQTT:
       stream=None,
       camera_ids=None,
       prefix="SFS_YOKA_POKE",
+      off_defaults=None,
   ):
     # Topic prefix comes from config.json (mqtt_prefix); must match the web project profile.
     self.prefix = prefix or "SFS_YOKA_POKE"
     self.camera_ids = list(camera_ids or [])
+    # Status sent while the worker is off, built from the project manifest
+    # (platform_core.manifest_utils.off_status_defaults). None = SFS legacy keys.
+    self.off_defaults = dict(off_defaults) if off_defaults else None
     self.MQTTserver = broker_url
     self.machineID = device_id
     self.api_key = api_key
@@ -36,8 +43,10 @@ class MQTT:
 
     
     try:
+      # Unique client id: two boxes with the same device_id (copied config.json)
+      # must not kick each other off the broker in an endless reconnect loop.
       self.mqtt_client = mqtt.Client(
-        client_id=self.machineID,
+        client_id=f"{self.machineID}-{uuid.uuid4().hex[:8]}",
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2
       )
     except AttributeError:
@@ -149,6 +158,10 @@ class MQTT:
   # ==================== Publish Data ====================
 
   def off_payload(self):
+    if self.off_defaults is not None:
+      payload = json.loads(json.dumps(self.off_defaults))
+      payload["camera"] = {cam_id: False for cam_id in self.camera_ids}
+      return payload
     return {
         "program_status": "OFF",
         "camera": {cam_id: False for cam_id in self.camera_ids},

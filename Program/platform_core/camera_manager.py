@@ -28,7 +28,9 @@ class CameraManager:
         for cam_info in camera_definitions:
             cam_id = str(cam_info.get("id", "cam_1"))
             hw_index = int(cam_info.get("hardware_index", 0))
-            cameras[cam_id] = UeyeCamera(camera_id=hw_index)
+            settings = cam_info.get("settings")
+            cameras[cam_id] = UeyeCamera(camera_id=hw_index,
+                                         settings=settings if isinstance(settings, dict) else None)
         return cls(cameras)
 
     def connect_all(self, width: int, height: int, fps: int = 15) -> bool:
