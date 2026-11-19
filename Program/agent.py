@@ -1,14 +1,20 @@
+"""Edge agent: MQTT link to the web, device registration, worker (main.py) control.
+
+Same file for every project (SFS, BG, ...): the project is found by
+platform_core.project_loader (env EDGE_PROJECT or the only folder in projects/).
+Runs on Linux and Windows.
+"""
 import asyncio
 import collections
-import fcntl
 import json
 import logging
 import os
-import signal
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import psutil
 
@@ -18,12 +24,19 @@ for _path in (ROOT_DIR, PROGRAM_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from Program.platform_core.module.getip import GetIPAddress
-from Program.platform_core.module.MQTTControl import MQTT
-from Program.platform_core.module.serverAPI import API_CALL
+from platform_core import project_loader
+from platform_core.manifest_utils import off_status_defaults
+from platform_core.module.getip import GetIPAddress
+from platform_core.module.MQTTControl import MQTT
+from platform_core.module.serverAPI import API_CALL
 from platform_core.module.shm import resiver
-from projects.SFS.config import Config
-from projects.SFS.manifest import build_manifest
+from platform_core.process_utils import (IS_WINDOWS, popen_kwargs, same_path, send_step,
+                                         single_instance_lock, stop_steps)
+from platform_core.safe_outputs import reset_outputs
+
+PROJECT = project_loader.active_project_name(PROGRAM_DIR)
+Config = project_loader.load(PROGRAM_DIR, "config", PROJECT).Config
+build_manifest = project_loader.load(PROGRAM_DIR, "manifest", PROJECT).build_manifest
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +50,9 @@ logger = logging.getLogger("AGENT")
 WATCHDOG_INTERVAL_S = 2.0
 MAX_AUTO_RESTARTS = 3
 RESTART_WINDOW_S = 600.0
+# Local commands from the desktop app (app_gui.py): checked once per second.
+CONTROL_INTERVAL_S = 1.0
+DISK_CHECK_INTERVAL_S = 60.0
 
 
 class Agent:
@@ -70,6 +86,8 @@ class Agent:
         self._expect_running = False
         self._crash_locked = False
         self._restart_times = collections.deque()
+        self._disk = {"pct": None, "time": 0.0, "warned": False}
+        self._agent_state = None
         self.last_log_pos = (
             os.path.getsize(self.WORKER_LOG) if os.path.exists(self.WORKER_LOG) else 0
         )
@@ -84,16 +102,25 @@ class Agent:
         threading.Thread(target=self._tail_log_worker, daemon=True).start()
         threading.Thread(target=self._republish_worker, daemon=True).start()
         threading.Thread(target=self._watchdog_worker, daemon=True).start()
+        threading.Thread(target=self._control_worker, daemon=True).start()
 
     @property
     def stop_flag(self):
         return self.config.stop_flag_path
 
+    @property
+    def control_path(self) -> str:
+        return str(Path(self.stop_flag).with_name("agent_control.json"))
+
+    @property
+    def state_path(self) -> str:
+        return str(Path(self.stop_flag).with_name("agent_state.json"))
+
     def _refresh_network(self):
         try:
             net = GetIPAddress()
-            # Register the IP of the port that reaches the web server: the web opens
-            # the live stream back to this IP (edge:stream_port).
+            # Register the IP of the wired LAN port that reaches the web server: the
+            # web opens the live stream back to this IP (edge:stream_port).
             route = None
             host = (self.config.server_url or "").strip()
             if host and host.lower() != "localhost":
@@ -119,6 +146,7 @@ class Agent:
                 logger.warning("Worker is in crash-lock (ERROR); not starting automatically.")
             else:
                 logger.info("No worker running on startup. Starting worker now...")
+                self._reset_outputs("agent startup, worker not running")
                 self.start_worker()
 
             is_running = self.get_worker_pid() is not None
@@ -128,7 +156,7 @@ class Agent:
                 self.payload = self._off_status(running=is_running)
 
             if self.MQ:
-                self.MQ.statusMsg(msg=self.payload, api_key=self.api_key)
+                self.MQ.statusMsg(msg=self._with_agent_fields(self.payload), api_key=self.api_key)
             logger.info("Start up complete.")
 
     def _register_loop(self):
@@ -169,14 +197,48 @@ class Agent:
         status = data.get("status", data) if isinstance(data, dict) else None
         return dict(status) if isinstance(status, dict) else None
 
+    # ==========================
+    # Disk usage (alert only, nothing is deleted)
+    # ==========================
+    def _disk_used_pct(self):
+        now = time.monotonic()
+        if self._disk["pct"] is not None and now - self._disk["time"] < DISK_CHECK_INTERVAL_S:
+            return self._disk["pct"]
+        path = getattr(self.config, "save_dir", None) or ROOT_DIR
+        while path and not os.path.exists(path):
+            parent = os.path.dirname(path)
+            if parent == path:
+                break
+            path = parent
+        try:
+            usage = shutil.disk_usage(path or ROOT_DIR)
+            pct = round(usage.used * 100.0 / usage.total, 1) if usage.total else None
+        except OSError:
+            pct = None
+        self._disk.update(pct=pct, time=now)
+        limit = float(getattr(self.config, "disk_warn_pct", 85) or 85)
+        if pct is not None and pct >= limit and not self._disk["warned"]:
+            self._disk["warned"] = True
+            msg = f"DISK {pct:.0f}% used (warning at {limit:.0f}%). Free space or images can no longer be saved."
+            logger.warning(msg)
+            self._append_worker_log(msg)
+        elif pct is not None and pct < limit - 2:
+            self._disk["warned"] = False
+        return pct
+
+    def _with_agent_fields(self, status):
+        status = dict(status or {})
+        status["disk_used_pct"] = self._disk_used_pct()
+        return status
+
     def handle_incoming_pipe_data(self, data):
         self.payload = data
         status = self._unwrap_status(data)
         if status:
             self.last_status = status
             if self.MQ:
-                self.MQ.statusMsg(msg=status, api_key=self.api_key)
-        logger.info("Got real-time event from shared memory: %s", data)
+                self.MQ.statusMsg(msg=self._with_agent_fields(status), api_key=self.api_key)
+        logger.debug("Got real-time event from shared memory: %s", data)
 
     def _republish_worker(self):
         while True:
@@ -192,7 +254,7 @@ class Agent:
                     status["last_update"] = time.time()
                 else:
                     status = self._off_status(running=True)
-                self.MQ.statusMsg(msg=status, api_key=self.api_key)
+                self.MQ.statusMsg(msg=self._with_agent_fields(status), api_key=self.api_key)
             except Exception:
                 logger.exception("Republish status failed")
 
@@ -212,6 +274,27 @@ class Agent:
         self._crash_locked = False
         self._restart_times.clear()
 
+    def _output_channels(self):
+        getter = getattr(self.config, "output_channels", None)
+        try:
+            return list(getter()) if callable(getter) else []
+        except Exception:
+            logger.exception("Cannot read output channels from config")
+            return []
+
+    def _reset_outputs(self, reason: str):
+        """Worker is not running: no process owns the IO card, force all outputs OFF."""
+        if self.get_worker_pid() is not None:
+            return
+        channels = self._output_channels()
+        if not channels:
+            return
+        result = reset_outputs(channels, device=getattr(self.config, "io_device", "USB-4761,BID#0"))
+        if result is False:
+            self._append_worker_log(f"WARNING: could not reset outputs to OFF ({reason}).")
+        elif result:
+            logger.info("Outputs reset to OFF (%s).", reason)
+
     def _watchdog_worker(self):
         while True:
             time.sleep(WATCHDOG_INTERVAL_S)
@@ -219,6 +302,10 @@ class Agent:
                 self._watchdog_check()
             except Exception:
                 logger.exception("Worker watchdog error")
+            try:
+                self._write_agent_state()
+            except Exception:
+                logger.exception("Cannot write agent state")
 
     def _watchdog_check(self):
         if not self._expect_running or self._crash_locked:
@@ -229,6 +316,8 @@ class Agent:
             return
 
         code = self.worker_proc.poll() if self.worker_proc is not None else None
+        # The dead worker may have left PASS / relay / ready outputs ON.
+        self._reset_outputs(f"worker died, exit code {code}")
         now = time.monotonic()
         while self._restart_times and now - self._restart_times[0] > RESTART_WINDOW_S:
             self._restart_times.popleft()
@@ -243,7 +332,8 @@ class Agent:
             for line in self._log_tail(15):
                 logger.info("%s", line)
             if self.MQ:
-                self.MQ.statusMsg(msg=self._off_status(running=False), api_key=self.api_key)
+                self.MQ.statusMsg(msg=self._with_agent_fields(self._off_status(running=False)),
+                                  api_key=self.api_key)
             return
 
         self._restart_times.append(now)
@@ -252,6 +342,67 @@ class Agent:
         logger.warning(msg)
         self._append_worker_log(msg)
         self.start_worker()
+
+    def _write_agent_state(self):
+        """Small state file for the desktop app; written only when the state changes."""
+        running = self.get_worker_pid() is not None
+        state = {
+            "worker": "RUNNING" if running else ("ERROR" if self._crash_locked else "OFF"),
+            "expect_running": bool(self._expect_running),
+            "agent_pid": os.getpid(),
+        }
+        if state == self._agent_state:
+            return
+        path = self.state_path
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(dict(state, time=time.time()), f)
+        os.replace(tmp, path)
+        self._agent_state = state
+
+    # ==========================
+    # Local control (desktop app) - same actions as the web/MQTT commands
+    # ==========================
+    def _control_worker(self):
+        while True:
+            time.sleep(CONTROL_INTERVAL_S)
+            try:
+                self._check_control_file()
+            except Exception:
+                logger.exception("Local control error")
+
+    def _check_control_file(self):
+        path = self.control_path
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            logger.warning("Invalid local control file %s: %s", path, e)
+            data = None
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        if not isinstance(data, dict):
+            return
+        command = str(data.get("command", "")).upper()
+        logger.info("Local command from desktop app: %s", command)
+        if command == "START":
+            if self.get_worker_pid() is None:
+                self._reset_crash_state()
+                threading.Thread(target=self.start_worker, daemon=True).start()
+        elif command == "STOP":
+            threading.Thread(target=self.stop_worker, daemon=True).start()
+        elif command == "TOGGLE":
+            self.toggle_worker(data)
+        elif command == "RESTART":
+            self.restart_worker(data.get("config") or {})
+        elif command == "STREAM":
+            self.stream_control({"enabled": bool(data.get("enabled")), "camera_id": data.get("camera_id")})
+        else:
+            logger.warning("Unknown local command: %r", command)
 
     def _tail_log_worker(self):
         while True:
@@ -306,6 +457,7 @@ class Agent:
                     camera_ids=[c["id"] for c in self.config.inspection_cameras],
                     api_key=self.api_key,
                     prefix=self.config.mqtt_prefix,
+                    off_defaults=self._manifest_off_defaults(),
                 )
                 self._setup_mqtt()
                 self.MQ.setMQTTServer(self.device_id, self.MQTTServer)
@@ -315,6 +467,13 @@ class Agent:
         except Exception as e:
             logger.exception("Failed to reload config: %s", e)
             return False
+
+    def _manifest_off_defaults(self):
+        try:
+            return off_status_defaults(build_manifest(self.config))
+        except Exception:
+            logger.exception("Cannot build OFF status from manifest")
+            return None
 
     def _setup_mqtt(self):
         self.MQ.callbackProgramcontrol = self.toggle_worker
@@ -326,7 +485,6 @@ class Agent:
     def get_worker_pid(self):
         if self.worker_proc is not None and self.worker_proc.poll() is None:
             return self.worker_proc.pid
-        worker_dir = os.path.realpath(self.WORKER_DIR)
         for proc in psutil.process_iter(["pid", "cmdline", "cwd"]):
             try:
                 if proc.info["pid"] == os.getpid():
@@ -336,7 +494,7 @@ class Agent:
                     continue
                 if self.WORKER_SCRIPT not in [os.path.basename(c) for c in cmd[1:]]:
                     continue
-                if os.path.realpath(proc.info.get("cwd") or "") == worker_dir:
+                if same_path(proc.info.get("cwd") or "", self.WORKER_DIR):
                     return proc.info["pid"]
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
@@ -348,14 +506,15 @@ class Agent:
                 self._expect_running = True
                 return False
             reset_script = os.path.join(ROOT_DIR, "reconnectusb.sh")
-            if os.path.exists(reset_script):
+            if not IS_WINDOWS and os.path.exists(reset_script):
                 logger.info("Executing camera reset script before starting worker...")
                 try:
                     subprocess.run(["sudo", reset_script], check=True)
                     logger.info("Camera reset completed successfully.")
                 except Exception as e:
                     logger.warning("Failed to run camera reset script: %s", e)
-            time.sleep(30)
+            # Give the camera driver time to come back (SFS: USB reset needs ~30 s).
+            time.sleep(float(getattr(self.config, "worker_start_delay_s", 30)))
             try:
                 os.remove(self.stop_flag)
             except OSError:
@@ -369,7 +528,7 @@ class Agent:
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
-                    start_new_session=True,
+                    **popen_kwargs(),
                 )
             finally:
                 log.close()
@@ -401,33 +560,39 @@ class Agent:
         self._expect_running = False
         with self._ctl_lock:
             self._expect_running = False
-            pid = self.get_worker_pid()
-            if not pid:
-                return
             try:
-                with open(self.stop_flag, "w", encoding="utf-8") as f:
-                    f.write("STOP")
-            except Exception as e:
-                logger.warning("Cannot write stop flag %s (%s); will use signals.", self.stop_flag, e)
+                self._stop_process(timeout)
+            finally:
+                # Whatever happened (clean exit or kill), no output may stay ON.
+                self._reset_outputs("worker stopped")
+
+    def _stop_process(self, timeout):
+        pid = self.get_worker_pid()
+        if not pid:
+            return
+        try:
+            with open(self.stop_flag, "w", encoding="utf-8") as f:
+                f.write("STOP")
+        except Exception as e:
+            logger.warning("Cannot write stop flag %s (%s); will use signals.", self.stop_flag, e)
+        try:
+            proc = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+        for step, wait in stop_steps(timeout):
             try:
-                proc = psutil.Process(pid)
+                send_step(proc, step)
             except psutil.NoSuchProcess:
                 return
-            for sig, wait in (
-                (None, timeout),
-                (signal.SIGINT, 5),
-                (signal.SIGTERM, 3),
-                (signal.SIGKILL, 2),
-            ):
-                try:
-                    if sig is not None:
-                        proc.send_signal(sig)
-                    proc.wait(timeout=wait)
-                    return
-                except psutil.TimeoutExpired:
-                    continue
-                except psutil.NoSuchProcess:
-                    return
+            except Exception as e:
+                logger.warning("Stop step %s failed: %s", step, e)
+            try:
+                proc.wait(timeout=wait)
+                return
+            except psutil.TimeoutExpired:
+                continue
+            except psutil.NoSuchProcess:
+                return
 
     def toggle_worker(self, data):
         logger.info("Toggle worker requested.")
@@ -537,11 +702,8 @@ class Agent:
 
 if __name__ == "__main__":
 
-    lock_file = "/tmp/sfs_agent.lock"
-    lock_fd = open(lock_file, "w")
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    _lock = single_instance_lock(f"{PROJECT.lower()}_agent")
+    if _lock is None:
         logger.warning("Another instance of agent.py is already running. Exiting.")
         sys.exit(0)
 

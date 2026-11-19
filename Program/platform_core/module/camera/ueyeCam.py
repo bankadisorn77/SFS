@@ -18,9 +18,22 @@ class UeyeCamera:
     SAFETY_PROBE_S = 60.0
     ACTIVE_PROBE_S = 2.0
 
-    def __init__(self, camera_id: int = 0):
+    # Image settings applied at connection. Defaults = SFS tuning. A project can
+    # override them per camera in config.json ("cameras": [{"settings": {...}}]);
+    # a value of None keeps the driver default (is_ResetToDefault), e.g. BG.
+    DEFAULT_SETTINGS = {
+        "pixel_clock": 24,       # MHz
+        "auto_off": True,        # disable auto shutter / auto gain
+        "exposure_ms": 10.0,
+        "lock_focus": True,
+        "manual_focus": 255,
+    }
+
+    def __init__(self, camera_id: int = 0, settings: dict = None):
         UeyeCamera._instances.add(self)
         self.camera_id = camera_id
+        self.settings = dict(UeyeCamera.DEFAULT_SETTINGS)
+        self.settings.update({k: v for k, v in (settings or {}).items() if k in UeyeCamera.DEFAULT_SETTINGS})
         self.hCam = ueye.HIDS(0)
         self.sInfo = ueye.SENSORINFO()
         self.cInfo = ueye.CAMINFO()
@@ -33,7 +46,7 @@ class UeyeCamera:
         self.width = 0
         self.height = 0
         self.target_fps = 15
-        self.manual_focus = 255
+        self.manual_focus = self.settings.get("manual_focus") or 255
         self.req_w = 1920
         self.req_h = 1080
         self.nBitsPerPixel_py = 0
@@ -91,22 +104,26 @@ class UeyeCamera:
             self._determine_color_mode()
             ueye.is_SetColorMode(self.hCam, self.m_nColorMode)
 
+            s = self.settings
             # 1. Fix Pixel Clock 
-            pixel_clock = ueye.c_uint(24) 
-            ueye.is_PixelClock(self.hCam, ueye.IS_PIXELCLOCK_CMD_SET, pixel_clock, ueye.sizeof(pixel_clock))
+            if s.get("pixel_clock") is not None:
+                pixel_clock = ueye.c_uint(int(s["pixel_clock"]))
+                ueye.is_PixelClock(self.hCam, ueye.IS_PIXELCLOCK_CMD_SET, pixel_clock, ueye.sizeof(pixel_clock))
 
             # 2. Fix Exposure & Gain 
-            auto_off = ueye.c_double(0)
-            
-            ueye.is_SetAutoParameter(self.hCam, ueye.IS_SET_ENABLE_AUTO_SHUTTER, auto_off, auto_off)
-            ueye.is_SetAutoParameter(self.hCam, ueye.IS_SET_ENABLE_AUTO_GAIN, auto_off, auto_off)
+            if s.get("auto_off"):
+                auto_off = ueye.c_double(0)
+                ueye.is_SetAutoParameter(self.hCam, ueye.IS_SET_ENABLE_AUTO_SHUTTER, auto_off, auto_off)
+                ueye.is_SetAutoParameter(self.hCam, ueye.IS_SET_ENABLE_AUTO_GAIN, auto_off, auto_off)
             
             # Exposure 
-            exposure_ms = ueye.c_double(10.0) 
-            ueye.is_Exposure(self.hCam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE, exposure_ms, ueye.sizeof(exposure_ms))
+            if s.get("exposure_ms") is not None:
+                exposure_ms = ueye.c_double(float(s["exposure_ms"]))
+                ueye.is_Exposure(self.hCam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE, exposure_ms, ueye.sizeof(exposure_ms))
 
             # 3. Lock Focus 
-            self._lock_focus()
+            if s.get("lock_focus"):
+                self._lock_focus()
 
 
             w, h = self._set_aoi(self.x, self.y, target_width, target_height)
