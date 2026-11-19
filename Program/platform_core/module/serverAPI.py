@@ -18,18 +18,43 @@ class API_CALL():
 
     @staticmethod
     def _channel(items, name):
-        for item in items or []:
+        if not isinstance(items, (list, tuple)):
+            return None
+        for item in items:
             if isinstance(item, dict) and item.get("name") == name:
                 return item.get("channel")
         return None
 
     @staticmethod
     def _channel_map(items):
+        if not isinstance(items, (list, tuple)):
+            return {}
         return {
             item["name"]: item.get("channel")
-            for item in items or []
+            for item in items
             if isinstance(item, dict) and "name" in item
         }
+
+    def _legacy_io(self):
+        """Legacy io fields for older web servers. A project config may provide
+        legacy_io() itself (BG uses single channel numbers, not name lists)."""
+        cfg = self.config
+        custom = getattr(cfg, "legacy_io", None)
+        if callable(custom):
+            try:
+                io_channel, io_config = custom()
+                return io_channel, io_config
+            except Exception:
+                logger.exception("legacy_io() failed")
+        inputs = getattr(cfg, "inputChannel", None)
+        outputs = getattr(cfg, "outputChannel", None)
+        io_channel = {
+            'input_channel': self._channel(inputs, 'round_1'),
+            'output_alarm_channel': self._channel(outputs, 'alarm'),
+            'output_light_channel': self._channel(outputs, 'state_machine'),
+        }
+        io_config = {'input': self._channel_map(inputs), 'output': self._channel_map(outputs)}
+        return io_channel, io_config
 
     def _manifest(self):
         if not callable(self.manifest_builder):
@@ -44,6 +69,7 @@ class API_CALL():
         async with httpx.AsyncClient(timeout=10.0) as client:
             url = f'{self.url}/register_device'
             cfg = self.config
+            io_channel, io_config = self._legacy_io()
             payload = {
                 'name': cfg.device_id,
                 'ip_address': cfg.ip,
@@ -52,18 +78,11 @@ class API_CALL():
                 'project_id': cfg.project_id,
                 'manifest': self._manifest(),
                 # Legacy fields kept for older web servers.
-                'io_channel': {
-                    'input_channel': self._channel(cfg.inputChannel, 'round_1'),
-                    'output_alarm_channel': self._channel(cfg.outputChannel, 'alarm'),
-                    'output_light_channel': self._channel(cfg.outputChannel, 'state_machine'),
-                },
-                'save_image_path': cfg.save_image_path,
+                'io_channel': io_channel,
+                'save_image_path': getattr(cfg, 'save_image_path', ''),
                 'mqtt_broker': cfg.MQTTServer,
-                'camera_config': cfg.cameras,
-                'io_config': {
-                    'input': self._channel_map(cfg.inputChannel),
-                    'output': self._channel_map(cfg.outputChannel),
-                },
+                'camera_config': getattr(cfg, 'cameras', []),
+                'io_config': io_config,
             }
             try:
                 res = await client.post(url=url, json=payload)
