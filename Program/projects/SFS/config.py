@@ -7,6 +7,13 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _as_bool(value) -> bool:
+    """JSON true/false, 1/0 or "true"/"false" strings (bool("false") would be True)."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "off", "no", "")
+    return bool(value)
+
+
 class Config:
     project_id = "SFS"
 
@@ -39,6 +46,8 @@ class Config:
         self.alarm_hold_s = 5.0
         # Send every inspection result (+ resized image) to the web server.
         self.upload_results = True
+        # Camera alignment lines (projects/SFS/overlay.py) on the live view only.
+        self.stream_overlay = True
         self.upload_image_width = 1280
         self.upload_jpeg_quality = 80
 
@@ -190,6 +199,8 @@ class Config:
 
             if "upload_results" in data:
                 self.upload_results = bool(data["upload_results"])
+            if data.get("stream_overlay") is not None:
+                self.stream_overlay = _as_bool(data["stream_overlay"])
 
             if "confident" in data:
                 self.confident = float(data["confident"])
@@ -260,6 +271,7 @@ class Config:
             "live_timeout_s": self.live_timeout_s,
             "alarm_hold_s": self.alarm_hold_s,
             "upload_results": self.upload_results,
+            "stream_overlay": self.stream_overlay,
             "upload_image_width": self.upload_image_width,
             "upload_jpeg_quality": self.upload_jpeg_quality,
             "confident": self.confident,
@@ -335,6 +347,8 @@ class Config:
                 setattr(self, name, int(data[name]))
         if data.get("upload_results") is not None:
             self.upload_results = bool(data["upload_results"])
+        if data.get("stream_overlay") is not None:
+            self.stream_overlay = _as_bool(data["stream_overlay"])
         if data.get("confident") is not None:
             self.confident = float(data["confident"])
         if data.get("alarm_hold_s") is not None:

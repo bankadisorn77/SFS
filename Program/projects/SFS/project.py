@@ -13,6 +13,7 @@ from .detector import Detector
 from .io import IO
 from .config import Config
 from .logic import Logic
+from .overlay import draw_alignment_lines
 
 logger = logging.getLogger("SfsPokaYokeProject")
 try:
@@ -180,7 +181,11 @@ class SfsPokaYokeProject(ProjectAdapter):
 
         self._last_status["machine_status"] = False
         self._remove_stream_control()
-        self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)
+        # Live view shows the camera alignment lines (config "stream_overlay", default on;
+        # ?overlay=0 in the stream URL turns them off). Inspection images are not touched.
+        self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port,
+                                   overlay=draw_alignment_lines,
+                                   overlay_default=getattr(self.config, "stream_overlay", True))
         self.stream.start()
         self.uploader.start()
 
