@@ -183,9 +183,16 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._remove_stream_control()
         # Live view shows the camera alignment lines (config "stream_overlay", default on;
         # ?overlay=0 in the stream URL turns them off). Inspection images are not touched.
-        self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port,
-                                   overlay=draw_alignment_lines,
-                                   overlay_default=getattr(self.config, "stream_overlay", True))
+        try:
+            self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port,
+                                       overlay=draw_alignment_lines,
+                                       overlay_default=getattr(self.config, "stream_overlay", True))
+        except TypeError:
+            # Old platform_core/module/stream.py without the overlay hook: keep the
+            # machine running (live view without lines) instead of a worker crash loop.
+            logger.warning("StreamServer has no overlay support (old platform_core/module/stream.py); "
+                           "live view runs WITHOUT alignment lines. Update stream.py.")
+            self.stream = StreamServer(runtime.camera_manager, port=self.config.stream_port)
         self.stream.start()
         self.uploader.start()
 
