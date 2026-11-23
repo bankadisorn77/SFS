@@ -14,6 +14,47 @@ def _as_bool(value) -> bool:
     return bool(value)
 
 
+AOI_MIN, AOI_MAX = 64, 8192
+
+
+def _parse_aoi(value) -> Optional[dict]:
+    """cameraAOI from config.json ({"width", "height"}) or the web ([width, height]).
+    Returns {"width": int, "height": int} or None if invalid."""
+    if isinstance(value, dict):
+        w, h = value.get("width"), value.get("height")
+    elif isinstance(value, (list, tuple)) and len(value) == 2:
+        w, h = value
+    else:
+        return None
+    try:
+        w, h = int(round(float(w))), int(round(float(h)))
+    except (TypeError, ValueError):
+        return None
+    if not (AOI_MIN <= w <= AOI_MAX and AOI_MIN <= h <= AOI_MAX):
+        return None
+    return {"width": w, "height": h}
+
+
+def _parse_image_format(value):
+    """"" / None = driver default (no change), "auto" = format matching cameraAOI,
+    a number = uEye format ID (listed in the log when the camera connects)."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if text.lower() in ("", "none", "default", "off"):
+        return ""
+    if text.lower() == "auto":
+        return "auto"
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
 class Config:
     project_id = "SFS"
 
@@ -70,7 +111,13 @@ class Config:
             {"name": "FB1", "channel": 0},
             {"name": "FB2", "channel": 1},
         ]
+        # Camera resolution (pixels). Changing it needs a camera reconnect (STOP -> START).
         self.cameraAOI = {"width": 1920, "height": 1080}
+        # uEye sensor image format for every camera (a camera "settings.image_format"
+        # overrides it): "" = driver default (old behaviour), "auto" = format that
+        # matches cameraAOI (needed above 1280x720 on cameras that reset to 720p),
+        # or a format ID number from the log line "Camera N: image formats: ...".
+        self.camera_image_format = ""
 
         self.referenceLine = {
             "cam_1": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
@@ -122,6 +169,36 @@ class Config:
     @property
     def inspection_cameras(self) -> List[dict]:
         return [c for c in self.cameras if c.get("enabled", True)]
+
+    def camera_definitions(self) -> List[dict]:
+        """Enabled cameras for CameraManager, with camera_image_format merged into
+        settings (copies: config.cameras itself is not changed)."""
+        out = []
+        for cam in self.inspection_cameras:
+            cam = dict(cam)
+            settings = dict(cam.get("settings") or {})
+            if self.camera_image_format not in ("", None) and "image_format" not in settings:
+                settings["image_format"] = self.camera_image_format
+            if settings:
+                cam["settings"] = settings
+            out.append(cam)
+        return out
+
+    def _set_aoi(self, value) -> bool:
+        aoi = _parse_aoi(value)
+        if aoi is None:
+            logger.warning("Ignoring invalid cameraAOI %r (need width/height %d..%d).", value, AOI_MIN, AOI_MAX)
+            return False
+        self.cameraAOI = aoi
+        return True
+
+    def _set_image_format(self, value) -> bool:
+        fmt = _parse_image_format(value)
+        if fmt is None:
+            logger.warning("Ignoring invalid camera_image_format %r (use \"\", \"auto\" or a format ID).", value)
+            return False
+        self.camera_image_format = fmt
+        return True
 
     # A name that is not in config.json returns None (= not wired), never channel 0:
     # channel 0 is round_1 (input) / FB1 (output) on the SFS machine.
@@ -211,10 +288,14 @@ class Config:
             if "ROI" in data and isinstance(data["ROI"], list):
                 self.ROI = [float(x) for x in data["ROI"]]
 
+            if "cameraAOI" in data:
+                self._set_aoi(data["cameraAOI"])
+            if "camera_image_format" in data:
+                self._set_image_format(data["camera_image_format"])
+
             for name in (
                 "inputChannel",
                 "outputChannel",
-                "cameraAOI",
                 "referenceLine",
                 "r1_rule",
                 "r2_rule",
@@ -279,6 +360,7 @@ class Config:
             "inputChannel": self.inputChannel,
             "outputChannel": self.outputChannel,
             "cameraAOI": self.cameraAOI,
+            "camera_image_format": self.camera_image_format,
             "referenceLine": self.referenceLine,
             "r1_rule": self.r1_rule,
             "r2_rule": self.r2_rule,
@@ -308,7 +390,6 @@ class Config:
         "ROI": list,
         "inputChannel": list,
         "outputChannel": list,
-        "cameraAOI": dict,
         "referenceLine": dict,
         "r1_rule": dict,
         "r2_rule": dict,
@@ -353,6 +434,11 @@ class Config:
             self.confident = float(data["confident"])
         if data.get("alarm_hold_s") is not None:
             self.alarm_hold_s = float(data["alarm_hold_s"])
+        # cameraAOI: {"width", "height"} or [width, height] (web number_list).
+        if data.get("cameraAOI") is not None:
+            self._set_aoi(data["cameraAOI"])
+        if "camera_image_format" in data:
+            self._set_image_format(data["camera_image_format"])
 
         if "referenceLine" in data and isinstance(data["referenceLine"], dict):
             if not isinstance(self.referenceLine, dict):
