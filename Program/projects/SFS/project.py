@@ -62,6 +62,9 @@ class SfsPokaYokeProject(ProjectAdapter):
         }
 
     def camera_definition(self) -> List[Dict[str, Any]]:
+        if hasattr(self.config, "camera_definitions"):
+            # enabled cameras + camera_image_format merged into settings
+            return self.config.camera_definitions()
         if isinstance(self.config, dict):
             cameras = self.config.get("cameras", [])
         else:
