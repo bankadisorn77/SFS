@@ -73,6 +73,7 @@
     "height": 1080
   },
   "camera_image_format": "",
+  "camera_manual_focus": 190,
   "referenceLine": {
     "cam_1": {
       "Angle": null,

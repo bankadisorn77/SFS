@@ -83,5 +83,8 @@ def build_manifest(config) -> Dict[str, Any]:
             {"key": "camera_image_format", "label": "uEye image format (blank = default, auto, or ID)",
              "type": "text", "group": "Cameras",
              "value": str(getattr(config, "camera_image_format", "") or "")},
+            {"key": "camera_manual_focus", "label": "Manual focus (uEye, 112-240) - apply: STOP -> START",
+             "type": "number", "group": "Cameras", "min": 0, "max": 1023, "step": 1,
+             "value": int(getattr(config, "camera_manual_focus", 190) or 190)},
         ],
     }

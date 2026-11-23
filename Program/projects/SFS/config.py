@@ -55,6 +55,18 @@ def _parse_image_format(value):
         return None
 
 
+FOCUS_MIN, FOCUS_MAX = 0, 1023
+
+
+def _parse_focus(value) -> Optional[int]:
+    """Manual focus position (uEye Cockpit: Camera > Focus > Manual focus)."""
+    try:
+        focus = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return focus if FOCUS_MIN <= focus <= FOCUS_MAX else None
+
+
 class Config:
     project_id = "SFS"
 
@@ -118,6 +130,10 @@ class Config:
         # matches cameraAOI (needed above 1280x720 on cameras that reset to 720p),
         # or a format ID number from the log line "Camera N: image formats: ...".
         self.camera_image_format = ""
+        # Manual focus position for every camera (autofocus off). 190 = sharpest in
+        # uEye Cockpit (range 112..240 on the SFS cameras; the driver clamps to the
+        # camera range). A camera "settings.manual_focus" overrides it.
+        self.camera_manual_focus = 190
 
         self.referenceLine = {
             "cam_1": {"Angle": None, "x1": None, "y1": None, "x2": None, "y2": None},
@@ -179,6 +195,8 @@ class Config:
             settings = dict(cam.get("settings") or {})
             if self.camera_image_format not in ("", None) and "image_format" not in settings:
                 settings["image_format"] = self.camera_image_format
+            if self.camera_manual_focus is not None and "manual_focus" not in settings:
+                settings["manual_focus"] = self.camera_manual_focus
             if settings:
                 cam["settings"] = settings
             out.append(cam)
@@ -190,6 +208,14 @@ class Config:
             logger.warning("Ignoring invalid cameraAOI %r (need width/height %d..%d).", value, AOI_MIN, AOI_MAX)
             return False
         self.cameraAOI = aoi
+        return True
+
+    def _set_focus(self, value) -> bool:
+        focus = _parse_focus(value)
+        if focus is None:
+            logger.warning("Ignoring invalid camera_manual_focus %r (need %d..%d).", value, FOCUS_MIN, FOCUS_MAX)
+            return False
+        self.camera_manual_focus = focus
         return True
 
     def _set_image_format(self, value) -> bool:
@@ -292,6 +318,8 @@ class Config:
                 self._set_aoi(data["cameraAOI"])
             if "camera_image_format" in data:
                 self._set_image_format(data["camera_image_format"])
+            if "camera_manual_focus" in data:
+                self._set_focus(data["camera_manual_focus"])
 
             for name in (
                 "inputChannel",
@@ -361,6 +389,7 @@ class Config:
             "outputChannel": self.outputChannel,
             "cameraAOI": self.cameraAOI,
             "camera_image_format": self.camera_image_format,
+            "camera_manual_focus": self.camera_manual_focus,
             "referenceLine": self.referenceLine,
             "r1_rule": self.r1_rule,
             "r2_rule": self.r2_rule,
@@ -439,6 +468,8 @@ class Config:
             self._set_aoi(data["cameraAOI"])
         if "camera_image_format" in data:
             self._set_image_format(data["camera_image_format"])
+        if data.get("camera_manual_focus") is not None:
+            self._set_focus(data["camera_manual_focus"])
 
         if "referenceLine" in data and isinstance(data["referenceLine"], dict):
             if not isinstance(self.referenceLine, dict):
