@@ -76,5 +76,12 @@ def build_manifest(config) -> Dict[str, Any]:
              "min": 0, "max": 15, "value": list(getattr(config, "outputChannel", []))},
             {"key": "cameras", "label": "Cameras enabled", "type": "camera_enable", "group": "Cameras",
              "value": list(getattr(config, "cameras", []))},
+            {"key": "cameraAOI", "label": "Resolution (px) - apply: STOP -> START", "type": "number_list",
+             "group": "Cameras", "labels": ["width", "height"], "min": 64, "max": 8192, "step": 1,
+             "value": [int((getattr(config, "cameraAOI", {}) or {}).get("width", 1920)),
+                       int((getattr(config, "cameraAOI", {}) or {}).get("height", 1080))]},
+            {"key": "camera_image_format", "label": "uEye image format (blank = default, auto, or ID)",
+             "type": "text", "group": "Cameras",
+             "value": str(getattr(config, "camera_image_format", "") or "")},
         ],
     }
