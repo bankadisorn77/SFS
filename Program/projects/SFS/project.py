@@ -325,9 +325,11 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._alarm_until = time.monotonic() + self._alarm_hold_s()
 
     def _expire_alarm_hold(self):
-        """NG / input-conflict alarm + FB1/FB2 are held alarm_hold_s seconds, then released.
+        """Reject alarm (out6) + FB1/FB2 FAIL are held alarm_hold_s seconds, then released.
 
-        Hardware faults (_hw_fault) are not timed: they stay until hardware is ready again.
+        out6 = reject only (NG, input conflict, loop error, trigger while not ready).
+        Hardware faults never drive out6: they show on state_machine (out7 OFF) and on
+        FB1/FB2 (fault), which stay until the hardware is ready again.
         """
         if not self._cycle_alarm or self._input_conflict or self._alarm_until is None:
             return
@@ -338,9 +340,8 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._alarm_until = None
         self.io.clear_fb_fail()
         self.io.set_fb_fault(self._hw_fault)
-        if not self._hw_fault:
-            self.io.set_alarm(False)
-            self._last_status["alarm_status"] = False
+        self.io.set_alarm(False)
+        self._last_status["alarm_status"] = False
         self._sync_fb_status()
 
     def _sync_fb_status(self):
@@ -353,11 +354,14 @@ class SfsPokaYokeProject(ProjectAdapter):
         self.io.clear_fb_fail()
         if not self._hw_fault:
             self.io.reset_state()
-            self.io.set_alarm(False)
-            self._last_status["alarm_status"] = False
+        # out6 is reject-only: no reject is held, so it is OFF (also during hw faults).
+        self.io.set_alarm(False)
+        self._last_status["alarm_status"] = False
         self._sync_fb_status()
 
     def _sync_hardware(self, ready: bool, gpio_ok: bool):
+        # out7 (state_machine) ON = cameras + GPIO ready and not in live mode.
+        # Not ready -> out7 OFF + FB1/FB2 fault; out6 (reject alarm) is NOT touched.
         light = ready and not self.streaming
         self._last_status["machine_status"] = light
         state = (ready, self.streaming)
@@ -371,15 +375,10 @@ class SfsPokaYokeProject(ProjectAdapter):
         ok = self.io.set_state_machine(light)
         
         if not ready:
-            ok = self.io.set_alarm(True) and ok
             self.io.set_fb_fault(True)
             self._hw_fault = True
-            self._last_status["alarm_status"] = True
             self._sync_fb_status()
         elif self._hw_fault:
-            if not self._cycle_alarm:
-                ok = self.io.set_alarm(False) and ok
-                self._last_status["alarm_status"] = False
             self.io.set_fb_fault(False)
             self._hw_fault = False
             self._sync_fb_status()
@@ -388,7 +387,11 @@ class SfsPokaYokeProject(ProjectAdapter):
         self._hw_synced = bool(ok)
 
     def _reject_not_ready(self, runtime, round_index: int, alarm: bool = True):
+        # A trigger that cannot be inspected is a reject: out6 ON, held alarm_hold_s.
+        # (alarm=False in live mode: the operator turned live on on purpose.)
         if alarm:
+            self._cycle_alarm = True
+            self._start_alarm_hold()
             self.io.set_alarm(True)
             self._last_status["alarm_status"] = True
         
