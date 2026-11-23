@@ -12,6 +12,35 @@ import ctypes
 logger = logging.getLogger(__name__)
 
 
+class _ImageFormatInfo(ctypes.Structure):
+    """IMAGE_FORMAT_INFO of the uEye SDK (uEye.h)."""
+    _fields_ = [
+        ("nFormatID", ctypes.c_int),
+        ("nWidth", ctypes.c_uint),
+        ("nHeight", ctypes.c_uint),
+        ("nX0", ctypes.c_int),
+        ("nY0", ctypes.c_int),
+        ("nSupportedCaptureModes", ctypes.c_uint),
+        ("nBinningMode", ctypes.c_uint),
+        ("nSubsamplingMode", ctypes.c_uint),
+        ("strFormatName", ctypes.c_char * 64),
+        ("dSensorScalerFactor", ctypes.c_double),
+        ("nReserved", ctypes.c_uint * 22),
+    ]
+
+
+def _image_format_list_type(count: int):
+    """IMAGE_FORMAT_LIST with room for `count` entries."""
+    class _ImageFormatList(ctypes.Structure):
+        _fields_ = [
+            ("nSizeOfListEntry", ctypes.c_uint),
+            ("nNumListElements", ctypes.c_uint),
+            ("nReserved", ctypes.c_uint * 4),
+            ("FormatInfo", _ImageFormatInfo * count),
+        ]
+    return _ImageFormatList
+
+
 class UeyeCamera:
     _capture_lock = threading.Lock()
     _instances = weakref.WeakSet()
@@ -27,6 +56,14 @@ class UeyeCamera:
         "exposure_ms": 10.0,
         "lock_focus": True,
         "manual_focus": 255,
+        # Sensor image format (resolution mode), set before the AOI. Some cameras (e.g.
+        # uEye XC) start in a 1280x720 format and the AOI cannot be larger than the
+        # format, so a 2592x1944 request gave 1280x720 images.
+        #   None   = keep the driver default format
+        #   "auto" = format with exactly the requested width x height (cameraAOI),
+        #            else the smallest larger one, else the largest available
+        #   <int>  = uEye format ID (listed in the log at connection)
+        "image_format": None,
     }
 
     def __init__(self, camera_id: int = 0, settings: dict = None):
@@ -105,6 +142,10 @@ class UeyeCamera:
             ueye.is_SetColorMode(self.hCam, self.m_nColorMode)
 
             s = self.settings
+            # 0. Image format (resolution mode) first: it resets AOI / pixel clock.
+            if s.get("image_format") not in (None, "", False):
+                self._apply_image_format(s.get("image_format"), target_width, target_height)
+
             # 1. Fix Pixel Clock 
             if s.get("pixel_clock") is not None:
                 pixel_clock = ueye.c_uint(int(s["pixel_clock"]))
@@ -143,6 +184,13 @@ class UeyeCamera:
                 self.height = inquired_h.value
                 self.nBitsPerPixel_py = inquired_bits.value
                 self.bytes_per_pixel = int(self.nBitsPerPixel_py / 8)
+
+            if (self.width, self.height) != (target_width, target_height):
+                logger.warning("Camera %s: image is %dx%d but %dx%d was requested (cameraAOI). "
+                               "Check settings.image_format (see the format list above).",
+                               self.camera_id, self.width, self.height, target_width, target_height)
+            else:
+                logger.info("Camera %s: resolution %dx%d.", self.camera_id, self.width, self.height)
 
             ueye.is_SetExternalTrigger(self.hCam, ueye.IS_SET_TRIGGER_OFF)
             logger.info("Camera %s: standby ready (trigger/snap mode).", self.camera_id)
@@ -381,6 +429,71 @@ class UeyeCamera:
         except Exception as e:
             logger.exception("Camera %s: focus lock error: %s", cid, e)
             return False
+
+    def list_image_formats(self):
+        """[{'id', 'width', 'height', 'name'}] supported by the connected sensor ([] if none)."""
+        count = ctypes.c_uint(0)
+        ret = ueye.is_ImageFormat(self.hCam, ueye.IMGFRMT_CMD_GET_NUM_ENTRIES, count, ctypes.sizeof(count))
+        if ret != ueye.IS_SUCCESS or count.value == 0:
+            logger.info("Camera %s: no image format list (ret=%s, entries=%s).", self.camera_id, ret, count.value)
+            return []
+        n = int(count.value)
+        fmt_list = _image_format_list_type(n)()
+        fmt_list.nSizeOfListEntry = ctypes.sizeof(_ImageFormatInfo)
+        fmt_list.nNumListElements = n
+        ret = ueye.is_ImageFormat(self.hCam, ueye.IMGFRMT_CMD_GET_LIST, fmt_list, ctypes.sizeof(fmt_list))
+        if ret != ueye.IS_SUCCESS:
+            logger.warning("Camera %s: reading image format list failed ret=%s.", self.camera_id, ret)
+            return []
+        formats = []
+        for i in range(n):
+            info = fmt_list.FormatInfo[i]
+            formats.append({
+                "id": int(info.nFormatID),
+                "width": int(info.nWidth),
+                "height": int(info.nHeight),
+                "name": info.strFormatName.decode("utf-8", errors="ignore").strip(),
+            })
+        return formats
+
+    @staticmethod
+    def choose_image_format(formats, wanted, width: int, height: int):
+        """Pick a format dict for settings.image_format ("auto" or an ID); None if not found."""
+        if not formats:
+            return None
+        if str(wanted).strip().lower() == "auto":
+            exact = [f for f in formats if f["width"] == width and f["height"] == height]
+            if exact:
+                return exact[0]
+            larger = [f for f in formats if f["width"] >= width and f["height"] >= height]
+            if larger:
+                return min(larger, key=lambda f: f["width"] * f["height"])
+            return max(formats, key=lambda f: f["width"] * f["height"])
+        try:
+            wanted_id = int(wanted)
+        except (TypeError, ValueError):
+            return None
+        return next((f for f in formats if f["id"] == wanted_id), None)
+
+    def _apply_image_format(self, wanted, width: int, height: int) -> bool:
+        formats = self.list_image_formats()
+        if formats:
+            logger.info("Camera %s: image formats: %s", self.camera_id,
+                        ", ".join(f"{f['id']}={f['width']}x{f['height']}" for f in formats))
+        chosen = self.choose_image_format(formats, wanted, width, height)
+        if chosen is None:
+            logger.warning("Camera %s: image_format=%r not available; keeping the driver default.",
+                           self.camera_id, wanted)
+            return False
+        fmt_id = ctypes.c_int(chosen["id"])
+        ret = ueye.is_ImageFormat(self.hCam, ueye.IMGFRMT_CMD_SET_FORMAT, fmt_id, ctypes.sizeof(fmt_id))
+        if ret != ueye.IS_SUCCESS:
+            logger.warning("Camera %s: set image format %s (%dx%d) failed ret=%s.",
+                           self.camera_id, chosen["id"], chosen["width"], chosen["height"], ret)
+            return False
+        logger.info("Camera %s: image format %s -> %dx%d %s", self.camera_id, chosen["id"],
+                    chosen["width"], chosen["height"], chosen["name"])
+        return True
 
     def _set_aoi(self, x, y, w, h):
         self.rectAOI.s32X = ueye.int(x)
